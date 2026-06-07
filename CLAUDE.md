@@ -69,16 +69,50 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 
 > **Client is split across `.html` partials stitched by `include()`.** Apps
 > Script serves ONE document: `doGet` evaluates `WebappPage.html`, whose
-> `<?!= include('X') ?>` scriptlets inline each partial's raw content at serve
-> time. The four JS partials are concatenated **inside a single `<script>`
-> IIFE**, so they share one closure (`STATE`, `INV`, helpers) — function
-> declarations hoist across all of them, so include order only matters for
-> top-level statements (hence `InitJs` last). This is purely source
-> organization: there is no per-file lazy-loading or runtime size win.
-> `include()` uses `createHtmlOutputFromFile` (NOT template eval), so partials
-> must contain no `<?= ?>` scriptlets — all `<?!= ?>` stay in `WebappPage.html`.
-> To verify after edits: resolve the includes, extract `<script>` blocks, and
-> `node --check` the assembled JS (see the split commit for the exact snippet).
+> `<?!= include('X') ?>` scriptlets inline each partial at serve time. This is
+> purely source organization — there is no per-file lazy-loading or runtime
+> size win.
+>
+> ⚠️ **WORKAROUND — every JS partial MUST wrap its code in its own
+> `<script>…</script>` tag, and there is NO outer IIFE.** `include()` calls
+> `HtmlService.createHtmlOutputFromFile`, which **parses the included file as
+> HTML**. A partial of *raw* JS throws `Exception: Malformed HTML content`
+> because tag-like string literals (`'<path …>'`, `'<div …>'`, `'<svg …>'`) are
+> parsed as real (broken) HTML. Wrapping the body in a `<script>` tag makes the
+> HTML parser treat it as opaque text. (We hit this exact error on the dev URL
+> after the first split, when the partials were bare JS inside one outer
+> `<script>` IIFE in `WebappPage.html`.) Consequences and rules:
+> - **No spanning IIFE.** You can't open `(function(){` in one partial and close
+>   it in another (each file must be independently valid HTML). So the partials
+>   run at **global scope** and share state via globals (`STATE`, `INV`,
+>   helpers, `PALETTES`, `toast`, …). This is fine — they shared one scope
+>   anyway. Each partial starts with `"use strict";` inside its `<script>`.
+> - **Load order matters for top-level statements** (function *declarations*
+>   only hoist within their own script now). `InitJs` must be included LAST —
+>   it calls functions defined in the other partials.
+> - **No partial may contain the literal `</script>`** (it would close the tag
+>   early) — the SVG builders emit `<path>`/`<text>`/`<rect>`, never `<script>`,
+>   so we're fine. Also keep the literal `<script` out of HTML *comments* in
+>   `WebappPage.html`.
+> - `Styles.html` (a `<style>` block) and `PayrollSankeyPage.html` (plain
+>   markup) are valid HTML, so they include fine without wrapping.
+> - All `<?!= ?>` scriptlets stay in `WebappPage.html`; `createHtmlOutputFromFile`
+>   does NOT evaluate scriptlets, so partials contain none.
+>
+> **Verify after editing any client file** (resolve includes, extract the
+> non-`src` `<script>` blocks, `node --check` the concatenation):
+> ```bash
+> python3 - <<'EOF'
+> import re
+> inc={n:open(n+'.html').read() for n in ['Styles','PayrollSankeyPage','CoreJs','PayrollSankeyJs','InvestmentJs','InitJs']}
+> page=open('WebappPage.html').read()
+> page=re.sub(r"<\?!= include\('([^']+)'\) \?>", lambda m: inc[m.group(1)], page)
+> page=page.replace("<?!= bootstrap ?>","null")
+> blocks=re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", page, re.S)
+> open('/tmp/assembled.js','w').write("\n".join(blocks))
+> EOF
+> node --check /tmp/assembled.js
+> ```
 | `Tax.gs` | `FedTax`, `CATax`, year-specific aliases. Brackets for 2023/2024/2025 hardcoded. | yes |
 | `Stock.gs` | `GET_ALL_STOCK_SUMMARIES` FIFO lot-accounting function. | yes |
 | `appsscript.json` | Apps Script manifest: web-app config (`executeAs: USER_ACCESSING`, `access: ANYONE`), enables Sheets advanced service, declares OAuth scopes. | yes |
