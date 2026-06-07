@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<title>PayrollSankey — Print</title>
+<style>
+  html, body { margin: 0; padding: 0; background: white; }
+  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  #sankey-wrap { width: 96vw; max-width: 1600px; }
+  #sankey-wrap svg { width: 100%; height: auto; display: block; }
+  .toolbar { position: fixed; top: 8px; right: 12px; display: flex; gap: 6px; }
+  .toolbar button { padding: 6px 12px; background: #1a73e8; color: white; border: none; border-radius: 4px; font-size: 13px; cursor: pointer; }
+  .toolbar button:hover { background: #1557b0; }
+  .hint { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); font-size: 12px; color: #888; background: white; padding: 4px 10px; border-radius: 12px; }
+  @media print {
+    .toolbar, .hint { display: none !important; }
+    body { margin: 0; padding: 0; background: white; }
+    #sankey-wrap { width: 100%; max-width: none; }
+    @page { size: landscape; margin: 0.4in; }
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <button onclick="window.print();">Print / Save as PDF</button>
+    <button onclick="window.close();" style="background:#eef0f3;color:#222;">Close</button>
+  </div>
+  <div id="sankey-wrap">
+    <?!= svgContent ?>
+  </div>
+  <div class="hint">Use your browser's Print dialog → Destination: Save as PDF. The diagram is vector, so the PDF scales cleanly.</div>
+  <script>
+    // Auto-open the print dialog after a short delay so the SVG has time to render.
+    setTimeout(function () {
+      try { window.print(); } catch (e) {}
+    }, 300);
+  </script>
+</body>
+</html>

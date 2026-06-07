@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<title>PayrollSankey</title>
+<style>
+  /* ---- CSS variables that drive the Sankey renderer (mirror SankeyRenderer.gs) ---- */
+  :root {
+    --node-width: 250px;
+    --node-font-size: 24px;
+    --node-text-background-opacity: 0;
+    --flow-opacity: 0.5;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 14px; color: #1f1f1f; background: #f4f5f7; }
+  body { padding: 16px; max-width: 1600px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 12px 0; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .topbar .who { font-size: 12px; color: #777; }
+  .topbar .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .panel { background: white; border: 1px solid #e1e3e6; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+  .panel > summary { padding: 10px 14px; font-weight: 600; cursor: pointer; user-select: none; background: #fafbfc; list-style: none; display: flex; align-items: center; gap: 8px; }
+  .panel > summary::-webkit-details-marker { display: none; }
+  .panel > summary::before { content: "▶"; font-size: 10px; color: #888; transition: transform .12s; display: inline-block; }
+  .panel[open] > summary::before { transform: rotate(90deg); }
+  .panel-body { padding: 12px 14px; }
+
+  .btn { padding: 6px 12px; background: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  .btn:hover { background: #1557b0; }
+  .btn.ghost { background: #eef0f3; color: #222; }
+  .btn.ghost:hover { background: #dfe2e6; }
+  .btn.danger { background: #d93025; }
+  .btn.danger:hover { background: #b3261c; }
+  .btn.green { background: #1e8e3e; }
+  .btn.green:hover { background: #137333; }
+  .btn.sm { padding: 4px 8px; font-size: 12px; }
+  .btn.icon { padding: 4px 8px; background: transparent; color: #555; }
+  .btn.icon:hover { background: #eef0f3; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ---- Sankey panel ---- */
+  #sankey-svg { width: 100%; height: auto; min-height: 280px; background: white; display: block; }
+  .canvas-wrap { padding: 6px; background: #fff; border: 1px solid #eaecef; border-radius: 6px; }
+  .nodes text { font-family: "Open Sans", Arial, sans-serif; font-weight: 600; font-size: var(--node-font-size); pointer-events: none; }
+  .nodes rect { opacity: 0.85; }
+  .nodes .label-bg { fill: white; rx: 3; opacity: var(--node-text-background-opacity); }
+  .links path { fill: none; opacity: var(--flow-opacity); }
+  .links path:hover { opacity: 0.85; }
+
+  /* ---- Settings ---- */
+  .settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 18px; }
+  .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .setting-row label { flex: 1; font-size: 12px; color: #333; }
+  .setting-row input[type=number], .setting-row input[type=text], .setting-row select { width: 110px; padding: 3px 6px; font-size: 12px; }
+  .setting-row input[type=checkbox] { width: auto; }
+
+  /* ---- Editor (Panel 3) ---- */
+  .subpanel { border: 1px solid #e1e3e6; border-radius: 6px; margin-bottom: 10px; background: #fff; }
+  .subpanel > summary { padding: 8px 12px; font-weight: 600; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; list-style: none; background: #f4f6f8; border-radius: 6px 6px 0 0; }
+  .subpanel[open] > summary { border-bottom: 1px solid #e1e3e6; }
+  .subpanel > summary::-webkit-details-marker { display: none; }
+  .subpanel > summary::before { content: "▶"; font-size: 10px; color: #888; transition: transform .12s; display: inline-block; }
+  .subpanel[open] > summary::before { transform: rotate(90deg); }
+  .subpanel-meta { margin-left: auto; display: flex; gap: 6px; align-items: center; font-size: 11px; color: #777; }
+  .subpanel-body { padding: 8px 12px 12px; }
+
+  .row-grid { display: grid; grid-template-columns: 28px 1fr 130px 1fr 32px; gap: 8px; align-items: center; padding: 4px 0; }
+  .row-grid > .col-head { font-size: 11px; color: #777; padding: 2px 0; text-transform: uppercase; letter-spacing: 0.5px; }
+  .drag-handle { cursor: grab; color: #aaa; font-size: 16px; text-align: center; user-select: none; }
+  .drag-handle:active { cursor: grabbing; }
+  .row-grid.is-dragging { opacity: 0.5; }
+  .row-grid.drag-over-above { border-top: 2px solid #1a73e8; }
+  .row-grid.drag-over-below { border-bottom: 2px solid #1a73e8; }
+
+  .cell { position: relative; display: flex; flex-direction: column; gap: 1px; padding: 4px 6px; border: 1px solid #e1e3e6; border-radius: 4px; background: #fff; cursor: text; min-height: 32px; }
+  .cell.is-formula { background: #f7faff; }
+  .cell .formula-text { font-family: "SFMono-Regular","Consolas",monospace; font-size: 10px; color: #1a73e8; word-break: break-all; line-height: 1.1; }
+  .cell .display-text { font-size: 13px; color: #1f1f1f; }
+  .cell .display-text.numeric { font-variant-numeric: tabular-nums; text-align: right; }
+  .cell:hover { border-color: #1a73e8; }
+  .cell input { width: 100%; border: none; outline: none; font-size: 13px; padding: 0; background: transparent; font-family: inherit; }
+  .cell.editing { background: #fff8e1; border-color: #f9ab00; }
+  .cell.is-locked { background: #f1f3f4; cursor: not-allowed; color: #888; }
+  .cell .suggest-list { position: absolute; top: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #d0d3d6; border-radius: 4px; z-index: 20; display: none; }
+  .cell .suggest-list.show { display: block; }
+  .cell .suggest-item { padding: 4px 8px; cursor: pointer; font-size: 12px; }
+  .cell .suggest-item:hover, .cell .suggest-item.active { background: #e8f0fe; }
+
+  .delete-btn { background: transparent; color: #d93025; border: none; cursor: pointer; font-size: 16px; padding: 0; width: 24px; height: 24px; border-radius: 50%; }
+  .delete-btn:hover { background: #fce8e6; }
+
+  .add-row-btn { margin-top: 6px; }
+  .lock-toggle { font-size: 16px; padding: 2px 6px; background: transparent; border: none; cursor: pointer; color: #777; }
+  .lock-toggle:hover { background: #e8eaed; border-radius: 4px; }
+  .lock-toggle.locked { color: #1a73e8; }
+
+  /* ---- Status banner ---- */
+  #poll-banner { position: fixed; top: 12px; right: 12px; max-width: 380px; background: #fff7e0; border: 1px solid #f1c232; border-radius: 6px; padding: 10px 14px; font-size: 13px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); z-index: 999; display: none; }
+  #poll-banner.show { display: block; }
+  #poll-banner .actions { margin-top: 6px; display: flex; gap: 6px; }
+
+  #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #202124; color: white; padding: 8px 14px; border-radius: 4px; font-size: 13px; z-index: 1000; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 0.95; }
+
+  /* ---- Mobile ---- */
+  @media (max-width: 768px) {
+    body { padding: 8px; }
+    h1 { font-size: 17px; }
+    .row-grid { grid-template-columns: 24px 1fr 32px; row-gap: 4px; }
+    .row-grid > .cell.input-cell { grid-column: 1 / -1; }
+    .row-grid > .cell.value-cell { grid-column: 1 / -1; }
+    .row-grid > .cell.output-cell { grid-column: 1 / -1; }
+    .row-grid > .col-head { display: none; }
+    .settings-grid { grid-template-columns: 1fr; }
+    .cell .formula-text { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>PayrollSankey</h1>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <span class="who" id="whoami"></span>
+    <div class="actions">
+      <button class="btn ghost sm" id="refresh-btn" title="Re-read all data from the sheet">Refresh</button>
+      <button class="btn ghost sm" id="export-png">PNG</button>
+      <button class="btn ghost sm" id="export-pdf">PDF (print)</button>
+    </div>
+  </div>
+</div>
+
+<!-- Panel 1: Sankey diagram (expanded) -->
+<details class="panel" id="panel-diagram" open>
+  <summary>Sankey diagram</summary>
+  <div class="panel-body">
+    <div class="canvas-wrap">
+      <svg id="sankey-svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <div id="render-status" style="font-size:11px; color:#777; margin-top:6px;"></div>
+  </div>
+</details>
+
+<!-- Panel 2: Settings (collapsed) -->
+<details class="panel" id="panel-settings">
+  <summary>Sankey settings</summary>
+  <div class="panel-body">
+    <div class="settings-grid">
+      <div class="setting-row"><label>Decimal precision</label><input type="number" id="precision" value="1" min="0" max="15"></div>
+      <div class="setting-row"><label>Hide zero decimals</label><input type="checkbox" id="hidezeros" checked></div>
+      <div class="setting-row"><label>Thousands separators</label><input type="checkbox" id="separators" checked></div>
+      <div class="setting-row"><label>Value prefix</label><input type="text" id="prefix" value="$"></div>
+      <div class="setting-row"><label>Value suffix</label><input type="text" id="suffix"></div>
+      <div class="setting-row"><label>Hide numbers</label><input type="checkbox" id="hidenumbers" checked></div>
+      <div class="setting-row"><label>Color scheme</label>
+        <select id="colorscheme">
+          <option value="default">default</option><option value="accent">accent</option>
+          <option value="paired">paired</option><option value="set2">set2</option>
+          <option value="set3">set3</option><option value="cat10">cat10</option>
+          <option value="pastel1">pastel1</option><option value="nested">nested</option>
+        </select></div>
+      <div class="setting-row"><label>Flow opacity (%)</label><input type="number" id="flow-opacity" value="50" min="0" max="100"></div>
+      <div class="setting-row"><label>Color by first word</label><input type="checkbox" id="firstword"></div>
+      <div class="setting-row"><label>Color nodes</label><input type="checkbox" id="colornodes" checked></div>
+      <div class="setting-row"><label>Node width (px)</label><input type="number" id="nodewidth" value="250" min="0"></div>
+      <div class="setting-row"><label>Node padding (px)</label><input type="number" id="nodepadding" value="20" min="0"></div>
+      <div class="setting-row"><label>Label placement</label>
+        <select id="labelplacement">
+          <option value="inside" selected>inside</option>
+          <option value="outside">outside</option>
+          <option value="above">above</option>
+        </select></div>
+      <div class="setting-row"><label>Label BG opacity (%)</label><input type="number" id="labelbg" value="0" min="0" max="100"></div>
+      <div class="setting-row"><label>Sort by line number</label><input type="checkbox" id="sortbyline" checked></div>
+      <div class="setting-row"><label>Canvas width</label><input type="number" id="canvaswidth" value="1920" min="100"></div>
+      <div class="setting-row"><label>Canvas height</label><input type="number" id="canvasheight" value="1080" min="100"></div>
+      <div class="setting-row"><label>Font size (px)</label><input type="number" id="fontsize" value="24" min="6"></div>
+      <div class="setting-row"><label>Node alignment</label>
+        <select id="nodealign">
+          <option value="justify">justify</option><option value="left">left</option>
+          <option value="right">right</option><option value="center">center</option>
+        </select></div>
+    </div>
+    <div style="margin-top:10px;"><button class="btn ghost sm" id="reset-settings">Reset to defaults</button></div>
+  </div>
+</details>
+
+<!-- Panel 3: Editor (collapsed) -->
+<details class="panel" id="panel-editor">
+  <summary>PayrollSankey editor</summary>
+  <div class="panel-body">
+    <div id="subpanels-container"></div>
+    <div style="margin-top:12px; padding-top:10px; border-top: 1px dashed #ddd;">
+      <button class="btn ghost sm" id="add-level-btn" disabled title="Bonus goal — not yet implemented in v1">+ Add new level</button>
+      <span style="font-size:11px; color:#999; margin-left:8px;">Foundational: edit columns by changing PRESET_RANGE in SankeyRenderer.gs.</span>
+    </div>
+  </div>
+</details>
+
+<!-- Polling conflict banner -->
+<div id="poll-banner" role="alert">
+  <div id="poll-banner-text"></div>
+  <div class="actions">
+    <button class="btn sm" id="banner-keep-mine">Keep my edits</button>
+    <button class="btn ghost sm" id="banner-discard">Take sheet version</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- Bootstrap payload from server -->
+<script>
+  window.BOOTSTRAP = <?!= bootstrap ?>;
+</script>
+
+<!-- d3 + d3-sankey from CDN (same versions as SankeyRenderer.gs modal) -->
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
+
+<script>
+(function () {
+"use strict";
+
+// =====================  Constants & state  =====================
+
+var BOOT = window.BOOTSTRAP || {};
+var STATE = {
+  subpanels: BOOT.subpanels || [],
+  hash: BOOT.hash || '',
+  locks: BOOT.locks || {},
+  settings: BOOT.settings || null,
+  unsaved: {}, // key "g:row:col" -> newText (pending write to sheet)
+  pendingTimers: {}, // key "g:row:col" -> timeout id
+  reorderAckShown: false,
+  flightInProgress: false
+};
+var POLL_INTERVAL_MS = 30000;
+var EDIT_DEBOUNCE_MS = 800;
+
+document.getElementById('whoami').textContent = BOOT.userEmail || '';
+
+// =====================  Color palettes (mirror SankeyRenderer.gs)  =====================
+
+var PALETTES = {
+  "default": ["#17becf","#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22"],
+  "accent":   d3.schemeAccent,
+  "paired":   d3.schemePaired,
+  "set2":     d3.schemeSet2,
+  "set3":     d3.schemeSet3,
+  "cat10":    d3.schemeCategory10,
+  "pastel1":  d3.schemePastel1,
+  "nested": [
+    "#17becf","#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b",
+    "#e377c2","#7f7f7f","#bcbd22","#aec7e8","#ffbb78","#98df8a","#ff9896",
+    "#c5b0d5","#c49c94","#f7b6d2","#c7c7c7","#dbdb8d","#9edae5","#393b79",
+    "#637939","#8c6d31","#843c39","#7b4173","#3182bd","#e6550d","#31a354",
+    "#756bb1","#636363","#5254a3","#bd9e39","#ad494a"
+  ]
+};
+
+// =====================  Sankey parser (mirror SankeyRenderer.gs)  =====================
+
+var LINE_RE = /^(.*?)\s*\[\s*([0-9,.?]+|\([0-9.+\-*\/()\s]+\))\s*([\$€£₽¥])?\s*\]\s*(.+?)(?:\s*\[(.+?)\])?\s*$/;
+
+function isCommentOrBlank(s) {
+  var t = String(s || '').trim();
+  if (t === '') return true;
+  if (t.indexOf('//') === 0) return true;
+  if (t.charAt(0) === "'") return true;
+  return false;
+}
+function evaluateMath(expr) {
+  if (!/^[-+*/().\d\s]+$/.test(expr)) return NaN;
+  try { return Function('"use strict";return (' + expr + ')')(); } catch (e) { return NaN; }
+}
+function firstWordOf(s) { var m = /\b(\w+)\b/.exec(String(s || '')); return m ? m[1] : String(s || ''); }
+
+function parseSankeyText(text) {
+  var rawLines = String(text || '').split(/\r?\n/);
+  var entries = [];
+  for (var i = 0; i < rawLines.length; i++) {
+    var line = rawLines[i];
+    if (isCommentOrBlank(line)) continue;
+    var m = LINE_RE.exec(line);
+    if (!m) continue;
+    var source = m[1].trim();
+    var rawVal = m[2].trim();
+    var target = m[4].trim();
+    var color = m[5] ? m[5].trim() : null;
+    if (!source || !target) continue;
+    var value = null;
+    if (rawVal === '?') value = null;
+    else if (rawVal.charAt(0) === '(') {
+      var ev = evaluateMath(rawVal);
+      value = isNaN(ev) ? 0 : ev;
+    } else {
+      var n = parseFloat(rawVal.replace(/,/g, ''));
+      value = isNaN(n) ? 0 : n;
+    }
+    entries.push({source: source, target: target, value: value, color: color, line: i + 1});
+  }
+  // Resolve [?]
+  for (var p = 0; p < 10; p++) {
+    var changed = false;
+    for (var k = 0; k < entries.length; k++) {
+      var e = entries[k];
+      if (e.value !== null) continue;
+      var inAll = 0, inAuto = false, outOther = 0, outAuto = false;
+      for (var j = 0; j < entries.length; j++) {
+        if (j === k) continue;
+        var f = entries[j];
+        if (f.target === e.target) { if (f.value === null) inAuto = true; else inAll += f.value; }
+        if (f.source === e.target) { if (f.value === null) outAuto = true; else outOther += f.value; }
+      }
+      if (!inAuto && !outAuto && inAll > 0) { e.value = Math.max(0, inAll - outOther); changed = true; }
+    }
+    if (!changed) break;
+  }
+  entries = entries.filter(function (e) { return e.value !== null && e.value > 0; });
+  var nodes = [], idx = {};
+  function add(name) { if (idx[name] === undefined) { idx[name] = nodes.length; nodes.push({name: name}); } return idx[name]; }
+  var links = entries.map(function (e) { return { source: add(e.source), target: add(e.target), value: e.value, color: e.color, line: e.line }; });
+  return { nodes: nodes, links: links };
+}
+
+// =====================  Build Sankey text from subpanel state  =====================
+
+/**
+ * Walk every subpanel (in column order) and emit
+ * SOURCE    [VALUE]    TARGET lines per row that has all three.
+ * This mirrors convertToSankeyFormat in SankeyRenderer.gs but runs on
+ * the live in-memory subpanel state (including unsaved edits), so the
+ * diagram reacts instantly to typing without a sheet round-trip.
+ */
+function buildSankeyTextFromState() {
+  var lines = [];
+  for (var g = 0; g < STATE.subpanels.length; g++) {
+    var sp = STATE.subpanels[g];
+    var setLines = [];
+    var seen = {};
+    for (var r = 0; r < sp.rows.length; r++) {
+      var row = sp.rows[r];
+      var src = displayOrEdit(g, row.sheetRow, 0, row.input);
+      var val = displayOrEdit(g, row.sheetRow, 1, row.value);
+      var tgt = displayOrEdit(g, row.sheetRow, 2, row.output);
+      var srcStr = cleanText(src);
+      var tgtStr = cleanText(tgt);
+      var valStr = cleanValueForSankey(val);
+      if (srcStr && tgtStr && valStr && valStr !== '0') {
+        var line = srcStr + '    [' + valStr + ']    ' + tgtStr;
+        if (!seen[line]) { seen[line] = true; setLines.push(line); }
+      }
+    }
+    if (setLines.length) {
+      if (lines.length) lines.push('');
+      lines = lines.concat(setLines);
+    }
+  }
+  return lines.join('\n');
+}
+
+/** If there's an unsaved edit for this cell, prefer that — else use the
+ *  display value the server sent. This is what keeps the diagram live
+ *  while edits are still in the debounce window. */
+function displayOrEdit(g, sheetRow, colInGroup, cell) {
+  var key = g + ':' + sheetRow + ':' + colInGroup;
+  if (STATE.unsaved.hasOwnProperty(key)) {
+    var t = STATE.unsaved[key];
+    // If user entered a formula, we cannot compute it client-side reliably.
+    // Fall back to the previous computed display value.
+    if (String(t).charAt(0) === '=') return cell.display || '';
+    return t;
+  }
+  return cell.display || '';
+}
+
+function cleanText(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).trim().replace(/\t/g, '    ');
+}
+function cleanValueForSankey(v) {
+  if (v === null || v === undefined || v === '') return '0';
+  var s = String(v).replace(/[\$,]/g, '').replace(/\t/g, ' ').trim();
+  var n = parseFloat(s);
+  if (isNaN(n)) return '0';
+  return String(Math.round(n));
+}
+
+// =====================  Settings  =====================
+
+var SETTING_IDS = ["precision","hidezeros","separators","prefix","suffix","hidenumbers",
+  "colorscheme","flow-opacity","firstword","colornodes","nodewidth","nodepadding",
+  "labelplacement","labelbg","sortbyline","canvaswidth","canvasheight","fontsize","nodealign"];
+
+function readSettings() {
+  function $(id) { return document.getElementById(id); }
+  return {
+    precision: $("precision").value,
+    hidezeros: $("hidezeros").checked,
+    separators: $("separators").checked,
+    prefix: $("prefix").value,
+    suffix: $("suffix").value,
+    hidenumbers: $("hidenumbers").checked,
+    colorscheme: $("colorscheme").value,
+    flowOpacity: parseInt($("flow-opacity").value, 10),
+    firstword: $("firstword").checked,
+    colornodes: $("colornodes").checked,
+    nodewidth: parseInt($("nodewidth").value, 10),
+    nodepadding: parseInt($("nodepadding").value, 10),
+    labelplacement: $("labelplacement").value,
+    labelbg: parseInt($("labelbg").value, 10),
+    sortbyline: $("sortbyline").checked,
+    canvasWidth: parseInt($("canvaswidth").value, 10),
+    canvasHeight: parseInt($("canvasheight").value, 10),
+    fontSize: parseInt($("fontsize").value, 10),
+    nodealign: $("nodealign").value
+  };
+}
+
+function applySettingsToUi(s) {
+  if (!s) return;
+  function $(id) { return document.getElementById(id); }
+  function setIf(id, prop, val) { if (val !== undefined && val !== null && $(id)) $(id)[prop] = val; }
+  setIf("precision","value", s.precision);
+  setIf("hidezeros","checked", s.hidezeros);
+  setIf("separators","checked", s.separators);
+  setIf("prefix","value", s.prefix);
+  setIf("suffix","value", s.suffix);
+  setIf("hidenumbers","checked", s.hidenumbers);
+  setIf("colorscheme","value", s.colorscheme);
+  setIf("flow-opacity","value", s.flowOpacity);
+  setIf("firstword","checked", s.firstword);
+  setIf("colornodes","checked", s.colornodes);
+  setIf("nodewidth","value", s.nodewidth);
+  setIf("nodepadding","value", s.nodepadding);
+  setIf("labelplacement","value", s.labelplacement);
+  setIf("labelbg","value", s.labelbg);
+  setIf("sortbyline","checked", s.sortbyline);
+  setIf("canvaswidth","value", s.canvasWidth);
+  setIf("canvasheight","value", s.canvasHeight);
+  setIf("fontsize","value", s.fontSize);
+  setIf("nodealign","value", s.nodealign);
+}
+
+function applyCssVars(s) {
+  var root = document.documentElement;
+  root.style.setProperty("--node-width", s.nodewidth + "px");
+  root.style.setProperty("--node-font-size", s.fontSize + "px");
+  root.style.setProperty("--node-text-background-opacity", (s.labelbg / 100));
+  root.style.setProperty("--flow-opacity", (s.flowOpacity / 100));
+}
+
+function formatValue(v, s) {
+  if (s.hidenumbers) return '';
+  var precision = Math.max(0, Math.min(15, parseInt(s.precision, 10) || 0));
+  var str = Number(v).toFixed(precision);
+  if (v !== 0 && parseFloat(str) === 0) {
+    for (var p = precision + 1; p <= 15; p++) { str = Number(v).toFixed(p); if (parseFloat(str) !== 0) break; }
+  }
+  if (s.hidezeros && str.indexOf('.') !== -1) str = str.replace(/\.?0+$/, '');
+  if (s.separators) { var parts = str.split('.'); parts[0] = Number(parts[0]).toLocaleString('en-US'); str = parts.join('.'); }
+  return (s.prefix || '') + str + (s.suffix || '');
+}
+
+function persistSettings() {
+  var s = readSettings();
+  google.script.run.saveSettings(JSON.stringify(s));
+}
+
+// =====================  Sankey renderer (mirror SankeyRenderer.gs)  =====================
+
+function renderSankey() {
+  var s = readSettings();
+  applyCssVars(s);
+  var text = buildSankeyTextFromState();
+  var parsed = parseSankeyText(text);
+
+  var svg = d3.select('#sankey-svg');
+  svg.attr('viewBox', '0 0 ' + s.canvasWidth + ' ' + s.canvasHeight);
+  svg.selectAll('*').remove();
+
+  if (!parsed.nodes.length) {
+    document.getElementById('render-status').textContent = 'No flows yet. Add data in the editor panel below.';
+    return;
+  }
+
+  svg.append('rect').attr('x', 0).attr('y', 0).attr('width', s.canvasWidth).attr('height', s.canvasHeight).attr('fill', 'white');
+
+  var alignFn = d3.sankeyJustify;
+  if (s.nodealign === 'left') alignFn = d3.sankeyLeft;
+  else if (s.nodealign === 'right') alignFn = d3.sankeyRight;
+  else if (s.nodealign === 'center') alignFn = d3.sankeyCenter;
+
+  var sankey = d3.sankey()
+    .nodeWidth(Math.max(1, s.nodewidth))
+    .nodePadding(Math.max(0, s.nodepadding))
+    .nodeAlign(alignFn)
+    .extent([[10, 10], [s.canvasWidth - 60, s.canvasHeight - 10]]);
+
+  if (s.sortbyline) {
+    sankey.nodeSort(function (a, b) { return (a.__firstLine || 0) - (b.__firstLine || 0); });
+  }
+  var firstLineByName = {};
+  parsed.links.forEach(function (l) {
+    var sName = parsed.nodes[l.source].name;
+    var tName = parsed.nodes[l.target].name;
+    if (firstLineByName[sName] === undefined || l.line < firstLineByName[sName]) firstLineByName[sName] = l.line;
+    if (firstLineByName[tName] === undefined || l.line < firstLineByName[tName]) firstLineByName[tName] = l.line;
+  });
+  parsed.nodes.forEach(function (n) { n.__firstLine = firstLineByName[n.name] || 0; });
+
+  var graph;
+  try {
+    graph = sankey({
+      nodes: parsed.nodes.map(function (n) { return Object.assign({}, n); }),
+      links: parsed.links.map(function (l) { return Object.assign({}, l); })
+    });
+  } catch (err) {
+    document.getElementById('render-status').textContent = 'Layout error: ' + err.message;
+    return;
+  }
+
+  var palette = PALETTES[s.colorscheme] || PALETTES['default'];
+  var color = d3.scaleOrdinal(palette);
+  function colorKey(name) { return s.firstword ? firstWordOf(name) : name; }
+
+  var linksG = svg.append('g').attr('class', 'links');
+  linksG.selectAll('path').data(graph.links).enter().append('path')
+    .attr('d', d3.sankeyLinkHorizontal())
+    .attr('stroke', function (d) { return d.color ? d.color : color(colorKey(d.source.name)); })
+    .attr('stroke-width', function (d) { return Math.max(2.5, d.width); })
+    .attr('fill', 'none')
+    .append('title').text(function (d) { return d.source.name + ' → ' + d.target.name + ': ' + formatValue(d.value, s); });
+
+  var nodesG = svg.append('g').attr('class', 'nodes');
+  var nodeG = nodesG.selectAll('g').data(graph.nodes).enter().append('g');
+  nodeG.append('rect')
+    .attr('x', function (d) { return d.x0; }).attr('y', function (d) { return d.y0; })
+    .attr('width', function (d) { return d.x1 - d.x0; })
+    .attr('height', function (d) { return Math.max(1, d.y1 - d.y0); })
+    .attr('fill', function (d) { return s.colornodes ? color(colorKey(d.name)) : '#888'; })
+    .append('title').text(function (d) { return d.name + ': ' + formatValue(d.value, s); });
+
+  function label(d) { return s.hidenumbers ? d.name : (d.name + ' — ' + formatValue(d.value, s)); }
+  var midX = s.canvasWidth / 2;
+  nodeG.append('text').attr('dy', '0.35em').text(label).each(function (d) {
+    var sel = d3.select(this);
+    var mid = (d.y0 + d.y1) / 2;
+    if (s.labelplacement === 'above') sel.attr('x', (d.x0 + d.x1) / 2).attr('y', d.y0 - 6).attr('text-anchor', 'middle');
+    else if (s.labelplacement === 'inside') sel.attr('x', (d.x0 + d.x1) / 2).attr('y', mid).attr('text-anchor', 'middle');
+    else if (d.x0 < midX) sel.attr('x', d.x1 + 6).attr('y', mid).attr('text-anchor', 'start');
+    else sel.attr('x', d.x0 - 6).attr('y', mid).attr('text-anchor', 'end');
+  });
+
+  if (s.labelbg > 0) {
+    nodeG.each(function () {
+      var g = d3.select(this);
+      var txt = g.select('text');
+      if (txt.empty()) return;
+      var bbox; try { bbox = txt.node().getBBox(); } catch (e) { return; }
+      g.insert('rect', 'text').attr('class', 'label-bg')
+        .attr('x', bbox.x - 3).attr('y', bbox.y - 1).attr('width', bbox.width + 6).attr('height', bbox.height + 2);
+    });
+  }
+
+  document.getElementById('render-status').textContent =
+    graph.nodes.length + ' nodes, ' + graph.links.length + ' flows.';
+}
+
+// =====================  Editor: subpanel rendering  =====================
+
+/**
+ * MODULAR subpanel renderer. Future "+ Add new level" only needs to
+ * call this once with a new groupIndex / columnStart / title.
+ */
+function renderSubpanel(subpanel, isLast) {
+  var container = document.createElement('details');
+  container.className = 'subpanel';
+  container.dataset.group = subpanel.groupIndex;
+
+  var summary = document.createElement('summary');
+  summary.innerHTML =
+    '<span>' + escapeHtml(subpanel.title) + '</span>' +
+    '<span class="subpanel-meta"><span class="row-count">' + subpanel.rows.length + ' rows</span>' +
+    '<button class="lock-toggle" title="Toggle read-only" data-group="' + subpanel.groupIndex + '">' +
+      (STATE.locks[String(subpanel.groupIndex)] ? '🔒' : '🔓') +
+    '</button></span>';
+  container.appendChild(summary);
+
+  var body = document.createElement('div');
+  body.className = 'subpanel-body';
+
+  // Header row (just labels — visible on desktop, hidden on mobile)
+  var header = document.createElement('div');
+  header.className = 'row-grid';
+  header.innerHTML =
+    '<div class="col-head"></div>' +
+    '<div class="col-head">Input (source)</div>' +
+    '<div class="col-head">Value</div>' +
+    '<div class="col-head">Output (target)</div>' +
+    '<div class="col-head"></div>';
+  body.appendChild(header);
+
+  var rowsHost = document.createElement('div');
+  rowsHost.className = 'rows-host';
+  rowsHost.dataset.group = subpanel.groupIndex;
+  if (subpanel.rows.length === 0) {
+    // Empty subpanel — render a single blank editable row
+    var blank = makeRowElement(subpanel.groupIndex, makeBlankRow(null), subpanel, isLast);
+    rowsHost.appendChild(blank);
+  } else {
+    subpanel.rows.forEach(function (row) {
+      rowsHost.appendChild(makeRowElement(subpanel.groupIndex, row, subpanel, isLast));
+    });
+  }
+  body.appendChild(rowsHost);
+
+  var addBtn = document.createElement('button');
+  addBtn.className = 'btn ghost sm add-row-btn';
+  addBtn.textContent = '+ Add row';
+  addBtn.addEventListener('click', function () { onAddRow(subpanel.groupIndex); });
+  body.appendChild(addBtn);
+
+  container.appendChild(body);
+  return container;
+}
+
+function makeBlankRow(sheetRow) {
+  return {
+    sheetRow: sheetRow, // null until first edit
+    input: { display: '', formula: '', raw: '' },
+    value: { display: '', formula: '', raw: '' },
+    output: { display: '', formula: '', raw: '' }
+  };
+}
+
+function makeRowElement(groupIndex, row, subpanel, isLast) {
+  var locked = !!STATE.locks[String(groupIndex)];
+  var grid = document.createElement('div');
+  grid.className = 'row-grid';
+  grid.dataset.sheetRow = row.sheetRow == null ? '' : row.sheetRow;
+  grid.dataset.group = groupIndex;
+  grid.draggable = !locked && row.sheetRow != null;
+
+  var handle = document.createElement('div');
+  handle.className = 'drag-handle';
+  handle.textContent = locked ? '·' : '⋮⋮';
+  handle.title = locked ? 'Locked' : 'Drag to reorder (moves entire spreadsheet row)';
+  grid.appendChild(handle);
+
+  grid.appendChild(makeCell(groupIndex, row.sheetRow, 0, row.input, 'input-cell', subpanel, isLast));
+  grid.appendChild(makeCell(groupIndex, row.sheetRow, 1, row.value, 'value-cell', subpanel, isLast));
+  grid.appendChild(makeCell(groupIndex, row.sheetRow, 2, row.output, 'output-cell', subpanel, isLast));
+
+  var del = document.createElement('button');
+  del.className = 'delete-btn';
+  del.title = 'Delete this row (clears 3 cells in this subpanel only)';
+  del.innerHTML = '×';
+  del.disabled = locked;
+  del.addEventListener('click', function () { onDeleteRow(groupIndex, row.sheetRow); });
+  grid.appendChild(del);
+
+  // Drag events
+  if (!locked && row.sheetRow != null) {
+    grid.addEventListener('dragstart', onDragStart);
+    grid.addEventListener('dragover', onDragOver);
+    grid.addEventListener('dragleave', onDragLeave);
+    grid.addEventListener('drop', onDrop);
+    grid.addEventListener('dragend', onDragEnd);
+  }
+
+  return grid;
+}
+
+function makeCell(groupIndex, sheetRow, colInGroup, cellData, classExtra, subpanel, isLast) {
+  var locked = !!STATE.locks[String(groupIndex)];
+  var key = groupIndex + ':' + sheetRow + ':' + colInGroup;
+  var div = document.createElement('div');
+  div.className = 'cell ' + classExtra;
+  if (cellData.formula) div.classList.add('is-formula');
+  if (locked) div.classList.add('is-locked');
+  div.dataset.group = groupIndex;
+  div.dataset.sheetRow = sheetRow == null ? '' : sheetRow;
+  div.dataset.colInGroup = colInGroup;
+
+  var formulaSpan = document.createElement('div');
+  formulaSpan.className = 'formula-text';
+  if (cellData.formula) formulaSpan.textContent = cellData.formula;
+
+  var displaySpan = document.createElement('div');
+  displaySpan.className = 'display-text';
+  var displayed = STATE.unsaved.hasOwnProperty(key) ? STATE.unsaved[key] : (cellData.display || '');
+  if (STATE.unsaved.hasOwnProperty(key) && String(STATE.unsaved[key]).charAt(0) === '=') {
+    // Show the unsaved formula text directly; computed value will appear after server roundtrip
+    formulaSpan.textContent = STATE.unsaved[key];
+    displayed = cellData.display || '(computing…)';
+    div.classList.add('is-formula');
+  }
+  displaySpan.textContent = displayed;
+  if (colInGroup === 1 && displayed && /[\d.,$]/.test(displayed)) displaySpan.classList.add('numeric');
+
+  if (cellData.formula) div.appendChild(formulaSpan);
+  div.appendChild(displaySpan);
+
+  if (!locked) {
+    div.addEventListener('click', function (ev) {
+      if (div.classList.contains('editing')) return;
+      enterEdit(div, groupIndex, sheetRow, colInGroup, cellData, subpanel, isLast);
+    });
+  }
+  return div;
+}
+
+function enterEdit(cellDiv, groupIndex, sheetRow, colInGroup, cellData, subpanel, isLast) {
+  cellDiv.classList.add('editing');
+  cellDiv.innerHTML = '';
+  var input = document.createElement('input');
+  input.type = 'text';
+  // Prefill with formula text (if any), else the display value, else the unsaved edit.
+  var key = groupIndex + ':' + sheetRow + ':' + colInGroup;
+  var prefill;
+  if (STATE.unsaved.hasOwnProperty(key)) prefill = STATE.unsaved[key];
+  else if (cellData.formula) prefill = cellData.formula;
+  else prefill = (cellData.display != null ? String(cellData.display) : '');
+  input.value = prefill;
+  cellDiv.appendChild(input);
+
+  // Suggest list for input (col 0) and output (col 2)
+  var suggest = null;
+  if (colInGroup === 0 || colInGroup === 2) {
+    suggest = document.createElement('div');
+    suggest.className = 'suggest-list';
+    cellDiv.appendChild(suggest);
+    var options = buildSuggestions(groupIndex, colInGroup);
+    function repopulate(filter) {
+      suggest.innerHTML = '';
+      var f = String(filter || '').toLowerCase();
+      var shown = 0;
+      options.forEach(function (opt) {
+        if (f && opt.toLowerCase().indexOf(f) === -1) return;
+        var item = document.createElement('div');
+        item.className = 'suggest-item';
+        item.textContent = opt;
+        item.addEventListener('mousedown', function (ev) {
+          ev.preventDefault();
+          input.value = opt;
+          suggest.classList.remove('show');
+          commit();
+        });
+        suggest.appendChild(item);
+        shown++;
+      });
+      suggest.classList.toggle('show', shown > 0);
+    }
+    input.addEventListener('focus', function () { repopulate(input.value); });
+    input.addEventListener('input', function () { repopulate(input.value); });
+  }
+
+  function commit() {
+    var newText = input.value;
+    cellDiv.classList.remove('editing');
+    // Capture the pending edit
+    if (newText !== prefill || (cellData.formula && newText !== cellData.formula)) {
+      STATE.unsaved[key] = newText;
+      schedulePersist(groupIndex, sheetRow, colInGroup, newText);
+    }
+    // Re-render this cell visually using the new pending value
+    var freshCell = (function () {
+      var sp = STATE.subpanels[groupIndex];
+      if (!sp) return cellData;
+      for (var i = 0; i < sp.rows.length; i++) {
+        if (sp.rows[i].sheetRow === sheetRow) {
+          if (colInGroup === 0) return sp.rows[i].input;
+          if (colInGroup === 1) return sp.rows[i].value;
+          if (colInGroup === 2) return sp.rows[i].output;
+        }
+      }
+      return cellData;
+    })();
+    var replacement = makeCell(groupIndex, sheetRow, colInGroup, freshCell, cellDiv.classList.contains('value-cell') ? 'value-cell' : (cellDiv.classList.contains('input-cell') ? 'input-cell' : 'output-cell'), subpanel, isLast);
+    cellDiv.parentNode.replaceChild(replacement, cellDiv);
+    debouncedRender();
+  }
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+    else if (ev.key === 'Escape') { input.value = prefill; input.blur(); }
+  });
+
+  setTimeout(function () { input.focus(); input.select(); }, 0);
+}
+
+function buildSuggestions(groupIndex, colInGroup) {
+  // colInGroup 0 (input): union of prev subpanel outputs + this subpanel's input col values
+  // colInGroup 2 (output): union of next subpanel inputs + this subpanel's output col values
+  var values = {};
+  function addAll(arr) { arr.forEach(function (v) { if (v) values[v] = true; }); }
+  var thisSp = STATE.subpanels[groupIndex];
+  if (!thisSp) return [];
+  if (colInGroup === 0) {
+    addAll(thisSp.rows.map(function (r) { return cleanText(displayOrEdit(groupIndex, r.sheetRow, 0, r.input)); }));
+    if (groupIndex > 0) {
+      var prev = STATE.subpanels[groupIndex - 1];
+      addAll(prev.rows.map(function (r) { return cleanText(displayOrEdit(groupIndex - 1, r.sheetRow, 2, r.output)); }));
+    }
+  } else if (colInGroup === 2) {
+    addAll(thisSp.rows.map(function (r) { return cleanText(displayOrEdit(groupIndex, r.sheetRow, 2, r.output)); }));
+    if (groupIndex + 1 < STATE.subpanels.length) {
+      var next = STATE.subpanels[groupIndex + 1];
+      addAll(next.rows.map(function (r) { return cleanText(displayOrEdit(groupIndex + 1, r.sheetRow, 0, r.input)); }));
+    }
+  }
+  delete values[''];
+  return Object.keys(values).sort();
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+// =====================  Edit persistence (debounced auto-save)  =====================
+
+function schedulePersist(groupIndex, sheetRow, colInGroup, newText) {
+  var key = groupIndex + ':' + sheetRow + ':' + colInGroup;
+  if (STATE.pendingTimers[key]) clearTimeout(STATE.pendingTimers[key]);
+  STATE.pendingTimers[key] = setTimeout(function () {
+    if (sheetRow == null) {
+      // Cell was on a blank "new row" placeholder — first allocate a sheetRow, then write.
+      google.script.run
+        .withSuccessHandler(function (resp) {
+          var newSheetRow = resp.sheetRow;
+          // Move the pending edit to the new key
+          STATE.unsaved[groupIndex + ':' + newSheetRow + ':' + colInGroup] = newText;
+          delete STATE.unsaved[key];
+          // Insert the row in local state
+          STATE.subpanels[groupIndex].rows.push(resp.row);
+          writeCell(groupIndex, newSheetRow, colInGroup, newText);
+        })
+        .withFailureHandler(function (e) {
+          toast('Add row failed: ' + (e && e.message ? e.message : e));
+        })
+        .appendRowToSubpanel(groupIndex);
+    } else {
+      writeCell(groupIndex, sheetRow, colInGroup, newText);
+    }
+    delete STATE.pendingTimers[key];
+  }, EDIT_DEBOUNCE_MS);
+}
+
+function writeCell(groupIndex, sheetRow, colInGroup, newText) {
+  STATE.flightInProgress = true;
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.flightInProgress = false;
+      // Update local cell state with server-side computed display + formula
+      var sp = STATE.subpanels[groupIndex];
+      if (sp) {
+        var found = false;
+        for (var i = 0; i < sp.rows.length; i++) {
+          if (sp.rows[i].sheetRow === sheetRow) {
+            if (colInGroup === 0) sp.rows[i].input = resp.cell;
+            else if (colInGroup === 1) sp.rows[i].value = resp.cell;
+            else if (colInGroup === 2) sp.rows[i].output = resp.cell;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          // The row didn't exist in local state — refresh fully.
+          refreshFromServer();
+          return;
+        }
+      }
+      STATE.hash = resp.hash;
+      var key = groupIndex + ':' + sheetRow + ':' + colInGroup;
+      delete STATE.unsaved[key];
+      rerenderSubpanelRow(groupIndex, sheetRow);
+      debouncedRender();
+    })
+    .withFailureHandler(function (e) {
+      STATE.flightInProgress = false;
+      toast('Save failed: ' + (e && e.message ? e.message : e));
+    })
+    .writeCellEdit({ groupIndex: groupIndex, sheetRow: sheetRow, colInGroup: colInGroup, newText: newText });
+}
+
+function rerenderSubpanelRow(groupIndex, sheetRow) {
+  // Find the .row-grid for this sheetRow and re-render it.
+  var host = document.querySelector('.rows-host[data-group="' + groupIndex + '"]');
+  if (!host) return;
+  var grids = host.querySelectorAll('.row-grid');
+  for (var i = 0; i < grids.length; i++) {
+    if (grids[i].dataset.sheetRow == String(sheetRow)) {
+      var sp = STATE.subpanels[groupIndex];
+      if (!sp) return;
+      var row = sp.rows.filter(function (r) { return r.sheetRow === sheetRow; })[0];
+      if (!row) return;
+      var fresh = makeRowElement(groupIndex, row, sp, groupIndex === STATE.subpanels.length - 1);
+      grids[i].parentNode.replaceChild(fresh, grids[i]);
+      return;
+    }
+  }
+}
+
+// =====================  Add / Delete row  =====================
+
+function onAddRow(groupIndex) {
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.subpanels[groupIndex].rows.push(resp.row);
+      STATE.hash = resp.hash;
+      rebuildSubpanel(groupIndex);
+    })
+    .withFailureHandler(function (e) { toast('Add row failed: ' + (e && e.message ? e.message : e)); })
+    .appendRowToSubpanel(groupIndex);
+}
+
+function onDeleteRow(groupIndex, sheetRow) {
+  if (sheetRow == null) {
+    // Blank placeholder row — just rebuild
+    STATE.subpanels[groupIndex].rows = STATE.subpanels[groupIndex].rows.filter(function (r) { return r.sheetRow != null; });
+    rebuildSubpanel(groupIndex);
+    return;
+  }
+  if (!confirm('Clear the 3 cells of this row in the ' + STATE.subpanels[groupIndex].title + ' subpanel? Other subpanels on this sheet row are not affected.')) return;
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.hash = resp.hash;
+      STATE.subpanels[groupIndex].rows = STATE.subpanels[groupIndex].rows.filter(function (r) { return r.sheetRow !== sheetRow; });
+      rebuildSubpanel(groupIndex);
+      debouncedRender();
+    })
+    .withFailureHandler(function (e) { toast('Delete failed: ' + (e && e.message ? e.message : e)); })
+    .clearRowInSubpanel(groupIndex, sheetRow);
+}
+
+function rebuildSubpanel(groupIndex) {
+  var oldEl = document.querySelector('.subpanel[data-group="' + groupIndex + '"]');
+  if (!oldEl) return;
+  var wasOpen = oldEl.open;
+  var sp = STATE.subpanels[groupIndex];
+  var fresh = renderSubpanel(sp, groupIndex === STATE.subpanels.length - 1);
+  fresh.open = wasOpen;
+  oldEl.parentNode.replaceChild(fresh, oldEl);
+}
+
+// =====================  Drag-to-reorder  =====================
+
+var dragSrc = null;
+function onDragStart(ev) {
+  dragSrc = this;
+  this.classList.add('is-dragging');
+  if (ev.dataTransfer) {
+    ev.dataTransfer.effectAllowed = 'move';
+    try { ev.dataTransfer.setData('text/plain', this.dataset.sheetRow); } catch (e) {}
+  }
+}
+function onDragOver(ev) {
+  if (!dragSrc || dragSrc === this) return;
+  if (dragSrc.dataset.group !== this.dataset.group) return; // only reorder within same subpanel
+  ev.preventDefault();
+  this.classList.remove('drag-over-above', 'drag-over-below');
+  var rect = this.getBoundingClientRect();
+  var above = ev.clientY - rect.top < rect.height / 2;
+  this.classList.add(above ? 'drag-over-above' : 'drag-over-below');
+}
+function onDragLeave() {
+  this.classList.remove('drag-over-above', 'drag-over-below');
+}
+function onDrop(ev) {
+  ev.preventDefault();
+  if (!dragSrc || dragSrc === this) return;
+  if (dragSrc.dataset.group !== this.dataset.group) return;
+  this.classList.remove('drag-over-above', 'drag-over-below');
+  var fromRow = parseInt(dragSrc.dataset.sheetRow, 10);
+  var rect = this.getBoundingClientRect();
+  var dropAbove = ev.clientY - rect.top < rect.height / 2;
+  var thisRow = parseInt(this.dataset.sheetRow, 10);
+  var toRow = dropAbove ? thisRow : thisRow + 1;
+  // If moving down, drop position after target needs to account for source removal.
+  if (fromRow < toRow) toRow = toRow - 1;
+  if (fromRow === toRow) return;
+  doMoveRow(parseInt(this.dataset.group, 10), fromRow, toRow);
+}
+function onDragEnd() {
+  if (dragSrc) dragSrc.classList.remove('is-dragging');
+  dragSrc = null;
+  document.querySelectorAll('.row-grid').forEach(function (g) {
+    g.classList.remove('drag-over-above', 'drag-over-below');
+  });
+}
+
+function doMoveRow(groupIndex, fromRow, toRow) {
+  // One-time confirmation per user (server-side ack).
+  if (!STATE.reorderAckShown && !BOOT.reorderAckedFromBootstrap) {
+    var ok = confirm(
+      'Heads up: reordering uses Google Sheets\' built-in row move. This shifts the ENTIRE spreadsheet row ' +
+      '(including columns outside this subpanel like A–C and P+). Formulas referencing the moved row will ' +
+      'auto-update, just like dragging a row in the Sheets UI. Proceed?'
+    );
+    if (!ok) return;
+    STATE.reorderAckShown = true;
+    google.script.run.setReorderAck();
+  }
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.hash = resp.hash;
+      refreshFromServer(); // re-read; formulas and sheet rows have shifted
+    })
+    .withFailureHandler(function (e) { toast('Reorder failed: ' + (e && e.message ? e.message : e)); })
+    .moveSheetRow(fromRow, toRow);
+}
+
+// =====================  Lock toggle  =====================
+
+document.addEventListener('click', function (ev) {
+  var t = ev.target;
+  if (t && t.classList && t.classList.contains('lock-toggle')) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    var g = parseInt(t.dataset.group, 10);
+    var current = !!STATE.locks[String(g)];
+    STATE.locks[String(g)] = !current;
+    google.script.run
+      .withSuccessHandler(function () {})
+      .withFailureHandler(function (e) { toast('Lock save failed: ' + (e && e.message ? e.message : e)); })
+      .setSubpanelLock(g, !current);
+    rebuildSubpanel(g);
+  }
+});
+
+// =====================  Polling for external sheet edits  =====================
+
+var pollTimer = null;
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(function () {
+    if (STATE.flightInProgress) return; // Don't poll while a write is mid-flight
+    google.script.run
+      .withSuccessHandler(function (resp) {
+        if (!resp.changed) return;
+        var localKeys = Object.keys(STATE.unsaved);
+        if (localKeys.length === 0) {
+          // No conflict, just refresh
+          STATE.subpanels = resp.subpanels;
+          STATE.hash = resp.hash;
+          rebuildAllSubpanels();
+          debouncedRender();
+        } else {
+          showPollBanner(resp);
+        }
+      })
+      .pollChanges(STATE.hash);
+  }, POLL_INTERVAL_MS);
+}
+
+function showPollBanner(resp) {
+  var b = document.getElementById('poll-banner');
+  document.getElementById('poll-banner-text').textContent =
+    'Sheet changed externally. You have ' + Object.keys(STATE.unsaved).length + ' unsaved local edit(s).';
+  b._pendingSnapshot = resp;
+  b.classList.add('show');
+}
+document.getElementById('banner-keep-mine').addEventListener('click', function () {
+  // Refresh from server but keep local unsaved edits (they\'ll overwrite on next save).
+  var b = document.getElementById('poll-banner');
+  if (b._pendingSnapshot) {
+    STATE.subpanels = b._pendingSnapshot.subpanels;
+    STATE.hash = b._pendingSnapshot.hash;
+  }
+  b.classList.remove('show');
+  rebuildAllSubpanels();
+  debouncedRender();
+});
+document.getElementById('banner-discard').addEventListener('click', function () {
+  var b = document.getElementById('poll-banner');
+  if (b._pendingSnapshot) {
+    STATE.subpanels = b._pendingSnapshot.subpanels;
+    STATE.hash = b._pendingSnapshot.hash;
+  }
+  STATE.unsaved = {};
+  Object.keys(STATE.pendingTimers).forEach(function (k) { clearTimeout(STATE.pendingTimers[k]); });
+  STATE.pendingTimers = {};
+  b.classList.remove('show');
+  rebuildAllSubpanels();
+  debouncedRender();
+});
+
+function refreshFromServer() {
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.subpanels = resp.subpanels;
+      STATE.hash = resp.hash;
+      rebuildAllSubpanels();
+      debouncedRender();
+    })
+    .withFailureHandler(function (e) { toast('Refresh failed: ' + (e && e.message ? e.message : e)); })
+    .refreshState();
+}
+
+document.getElementById('refresh-btn').addEventListener('click', refreshFromServer);
+
+function rebuildAllSubpanels() {
+  var host = document.getElementById('subpanels-container');
+  host.innerHTML = '';
+  for (var i = 0; i < STATE.subpanels.length; i++) {
+    host.appendChild(renderSubpanel(STATE.subpanels[i], i === STATE.subpanels.length - 1));
+  }
+}
+
+// =====================  Export: PNG + PDF (print-to-PDF)  =====================
+
+function buildSvgString() {
+  // Inline computed CSS vars + base rules so the SVG is self-contained.
+  var svgEl = document.getElementById('sankey-svg');
+  var cs = getComputedStyle(document.documentElement);
+  var vars = [
+    ["--node-width", cs.getPropertyValue("--node-width").trim() || "250px"],
+    ["--node-font-size", cs.getPropertyValue("--node-font-size").trim() || "24px"],
+    ["--node-text-background-opacity", cs.getPropertyValue("--node-text-background-opacity").trim() || "0"],
+    ["--flow-opacity", cs.getPropertyValue("--flow-opacity").trim() || "0.5"]
+  ];
+  var css = ":root{" + vars.map(function (v) { return v[0] + ":" + v[1] + ";"; }).join("") + "}" +
+            ".nodes text{font-family:\"Open Sans\",Arial,sans-serif;font-weight:600;font-size:var(--node-font-size);}" +
+            ".nodes rect{opacity:0.85;}" +
+            ".nodes .label-bg{fill:white;opacity:var(--node-text-background-opacity);}" +
+            ".links path{fill:none;opacity:var(--flow-opacity);}";
+  var existingStyle = svgEl.querySelector('style[data-export]');
+  if (existingStyle) existingStyle.remove();
+  var styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+  styleEl.setAttribute('data-export', '1');
+  styleEl.textContent = css;
+  svgEl.insertBefore(styleEl, svgEl.firstChild);
+  if (!svgEl.getAttribute('xmlns')) svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  var s = new XMLSerializer().serializeToString(svgEl);
+  var leftover = svgEl.querySelector('style[data-export]');
+  if (leftover) leftover.remove();
+  return s;
+}
+
+function exportPng() {
+  var s = readSettings();
+  var svgStr = buildSvgString();
+  var img = new Image();
+  var blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  img.onload = function () {
+    var canvas = document.createElement('canvas');
+    canvas.width = s.canvasWidth;
+    canvas.height = s.canvasHeight;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob(function (b) {
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = 'sankey-' + Date.now() + '.png';
+      document.body.appendChild(a); a.click();
+      setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 100);
+    }, 'image/png');
+  };
+  img.onerror = function () { URL.revokeObjectURL(url); toast('PNG export failed'); };
+  img.src = url;
+}
+
+function exportPdfViaPrintTab() {
+  var svgStr = buildSvgString();
+  toast('Preparing print tab…');
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      // Open the print URL (Apps Script web-app URL + ?print=1&token=…)
+      var url = window.location.pathname + '?print=1&token=' + encodeURIComponent(resp.token);
+      // Apps Script /exec or /dev URLs accept query string parameters directly.
+      // window.location includes both; we only need to keep up to the last segment + new params.
+      var base = window.location.href.split('?')[0];
+      window.open(base + '?print=1&token=' + encodeURIComponent(resp.token), '_blank');
+    })
+    .withFailureHandler(function (e) { toast('Print failed: ' + (e && e.message ? e.message : e)); })
+    .storePrintSvg(svgStr);
+}
+
+document.getElementById('export-png').addEventListener('click', exportPng);
+document.getElementById('export-pdf').addEventListener('click', exportPdfViaPrintTab);
+
+// =====================  Toast  =====================
+
+var toastTimer = null;
+function toast(msg) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3200);
+}
+
+// =====================  Debounced Sankey re-render  =====================
+
+var renderTimer = null;
+function debouncedRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(function () { renderSankey(); }, 120);
+}
+
+// =====================  Initial wiring  =====================
+
+// Apply saved settings
+if (STATE.settings) applySettingsToUi(STATE.settings);
+
+// Render subpanels
+rebuildAllSubpanels();
+
+// Initial Sankey
+renderSankey();
+
+// Settings change → re-render + persist
+SETTING_IDS.forEach(function (id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var evt = (el.type === 'checkbox' || el.tagName === 'SELECT') ? 'change' : 'input';
+  el.addEventListener(evt, function () {
+    debouncedRender();
+    schedulePersistSettings();
+  });
+});
+
+var settingsTimer = null;
+function schedulePersistSettings() {
+  if (settingsTimer) clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(persistSettings, 600);
+}
+
+document.getElementById('reset-settings').addEventListener('click', function () {
+  function $(id) { return document.getElementById(id); }
+  $("precision").value = 1; $("hidezeros").checked = true; $("separators").checked = true;
+  $("prefix").value = "$"; $("suffix").value = ""; $("hidenumbers").checked = true;
+  $("colorscheme").value = "default"; $("flow-opacity").value = 50;
+  $("firstword").checked = false; $("colornodes").checked = true;
+  $("nodewidth").value = 250; $("nodepadding").value = 20;
+  $("labelplacement").value = "inside"; $("labelbg").value = 0;
+  $("sortbyline").checked = true; $("canvaswidth").value = 1920;
+  $("canvasheight").value = 1080; $("fontsize").value = 24; $("nodealign").value = "justify";
+  debouncedRender();
+  schedulePersistSettings();
+});
+
+// Begin polling
+startPolling();
+
+})();
+</script>
+</body>
+</html>

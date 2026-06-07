@@ -1,0 +1,13 @@
+# Denylist mode — files clasp should NOT push.
+# Everything else in this folder is pushed. This prevents future
+# `clasp push` from deleting remote files we don't have locally.
+
+.git/**
+.gitignore
+node_modules/**
+*.xlsx
+*.md
+.clasp.json
+.clasprc.json
+.claspignore
+setup.sh
