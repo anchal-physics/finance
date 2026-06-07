@@ -44,7 +44,7 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 | File | Purpose | Don't lose this |
 |------|---------|------------------|
 | `SankeyRenderer.gs` | Menu-driven Sankey renderer + sankeydiagram.net-style modal dialog. Big file (~42 KB) — most of the bulk is inline HTML+JS for the dialog. | yes |
-| `Sankey.gs` | Legacy: original copy/paste-to-sankeydiagram.net converter. Kept in case the user wants to retire it later. | optional |
+| ~~`Sankey.gs`~~ | **Deleted** (in git history at/before this point). Legacy copy/paste-to-sankeydiagram.net converter, superseded by `SankeyRenderer.gs`. Removed from `.clasp.json` `filePushOrder` too. | gone |
 | `Webapp.gs` | Server endpoints for the web app: `doGet`, bootstrap payload, cell writes, row add/delete/move, settings + locks, polling, print-SVG handoff. | yes |
 | `WebappPage.html` | Main webapp UI: 3 collapsible panels (Sankey diagram, settings, editor). Formula-aware cell editor. Drag-reorder. 30s polling. PNG/PDF export. | yes |
 | `PrintPage.html` | Print-to-PDF view — receives an SVG token, embeds the SVG full-page with `@media print` CSS, auto-opens the print dialog. | yes |
@@ -205,9 +205,10 @@ upper edges and SD.
 ### California (FTB)
 
 Single + MFJ brackets in `Tax.gs` (`CA_BRACKETS[year][status]`).
-**Currently 2025 mirrors 2024 as a placeholder** — when FTB publishes
-their final 2025 inflation-indexed tables (typically Dec 2024 or Jan
-2025), update the 9 upper-edge numbers per status. Code includes
+**2025 brackets are now the FTB final indexed values** (Schedule X /
+Schedule Y from the 2025 California Tax Rate Schedules), verified
+against FTB's own worked example (MFJ taxable $125,000 → $4,768.10).
+2025 standard deduction: single $5,706, MFJ $11,412. Code includes
 the 1% Mental Health Services surcharge on taxable income over $1M.
 
 ### Why hardcoded brackets, not an API
@@ -287,7 +288,7 @@ Anchal. Don't relitigate without reason:
 | Read-only subpanels | Lock toggle per subpanel, stored in `UserProperties` | Useful for derived panels like "Total E&I" (M–O). |
 | External edits | Poll every 30s, prompt before overwriting unsaved local edits | Compromise between real-time feel and not hammering Apps Script quotas. |
 | PDF export | User-specified: **hardcoded SVG in script** → new tab → browser print-to-PDF | No external libs (no jsPDF/svg2pdf from CDN). |
-| Add new level | Stub button only (foundational v1); future expansion seam left in code | Bonus goal from `Next_Goals.md`. |
+| Add new level | **Implemented.** Button prompts for a title, calls `addNewLevel(title)`, which appends an `Input \| <title> \| Output` triplet to the right and persists a widened effective-range override in `ScriptProperties` (key `effective_range_v1`). `PRESET_RANGE` constant is left untouched; `getEffectiveRange_()` returns the override if present, else the constant. | Bonus goal from `Next_Goals.md`, now done. Override is script-wide (structural change, shared across users), not per-user. |
 
 ---
 
@@ -355,18 +356,24 @@ Things Anchal has demonstrated through conversation:
 
 ## 10. Outstanding / future work
 
-- **CA 2025 brackets** in `Tax.gs` currently mirror 2024 as a
-  placeholder. Replace with FTB's 2025 indexed values when published.
-- **"+ Add new level" button** in the webapp editor is disabled. To
-  enable: extend `PRESET_RANGE` to include 3 more columns
-  (D1:O39 → D1:R39), seed the header row with `Input | <title> |
-  Output` in the new columns, and the webapp will auto-detect the new
-  subpanel. Real implementation should write columns + header
-  programmatically (see stub `addNewLevel()` in `Webapp.gs`).
-- **Sankey.gs (legacy)** can be deleted once the new menu in
-  `SankeyRenderer.gs` is fully trusted. Currently kept for safety.
-- **migrate.sh** can be deleted now that the migration to this repo
-  is complete.
+- ~~**CA 2025 brackets**~~ **Done.** `Tax.gs` now holds FTB's final 2025
+  indexed brackets + standard deductions (single $5,706 / MFJ $11,412),
+  verified against FTB's worked example. Next year's update (2026) is the
+  same 30-second edit: add a `2026` block to `CA_BRACKETS` / `FED_BRACKETS`
+  and the deduction tables.
+- ~~**"+ Add new level" button**~~ **Done.** Button is enabled; calls
+  `addNewLevel(title)` which appends an `Input | <title> | Output` triplet
+  to the right of the last subpanel and persists a widened effective-range
+  override in `ScriptProperties` (`effective_range_v1`). `PRESET_RANGE`
+  constant is left untouched — `getEffectiveRange_()` prefers the override.
+  Caveat: for the default `D1:O39` sheet the first added level extends to
+  `D1:R39`, which spans column Q — the same cell `IMAGE_ANCHOR_CELL` uses
+  for the saved PNG. The PNG floats over cells (no data loss) but overlaps
+  visually. No "remove level" / range-reset UI yet; to reset, clear the
+  `effective_range_v1` script property.
+- ~~**Sankey.gs (legacy)**~~ **Deleted** — superseded by `SankeyRenderer.gs`
+  and preserved in git history. Also removed from `.clasp.json`.
+- ~~**migrate.sh**~~ **Deleted** — migration to this repo is complete.
 - **Conflict-resolution UI** during external-edit polling is basic
   (banner with Keep mine / Take sheet version). Could be improved
   with a cell-level diff view if it gets used heavily.

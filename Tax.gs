@@ -157,30 +157,29 @@ var CA_BRACKETS = {
       [Infinity, 0.123]
     ]
   },
-  // CA 2025 brackets — placeholder using 2024 values pending FTB final
-  // publication. Update when FTB releases the 2025 indexed tables.
-  // Replace upperEdge values below with FTB 2025 numbers when published.
+  // CA 2025 brackets — final FTB indexed values.
+  // Source: 2025 California Tax Rate Schedules (FTB, Schedule X / Schedule Y).
   2025: {
     single: [
-      [10756,   0.01],
-      [25499,   0.02],
-      [40245,   0.04],
-      [55866,   0.06],
-      [70606,   0.08],
-      [360659,  0.093],
-      [432787,  0.103],
-      [721314,  0.113],
+      [11079,   0.01],
+      [26264,   0.02],
+      [41452,   0.04],
+      [57542,   0.06],
+      [72724,   0.08],
+      [371479,  0.093],
+      [445771,  0.103],
+      [742953,  0.113],
       [Infinity, 0.123]
     ],
     mfj: [
-      [21512,   0.01],
-      [50998,   0.02],
-      [80490,   0.04],
-      [111732,  0.06],
-      [141212,  0.08],
-      [721318,  0.093],
-      [865574,  0.103],
-      [1442628, 0.113],
+      [22158,   0.01],
+      [52528,   0.02],
+      [82904,   0.04],
+      [115084,  0.06],
+      [145448,  0.08],
+      [742958,  0.093],
+      [891542,  0.103],
+      [1485906, 0.113],
       [Infinity, 0.123]
     ]
   }
@@ -189,7 +188,7 @@ var CA_BRACKETS = {
 var CA_STD_DEDUCTION = {
   2023: { single: 5363, mfj: 10726 },
   2024: { single: 5540, mfj: 11080 },
-  2025: { single: 5540, mfj: 11080 }  // Placeholder; update when FTB publishes 2025.
+  2025: { single: 5706, mfj: 11412 }  // FTB 2025 final indexed standard deduction.
 };
 
 var CA_MENTAL_HEALTH_THRESHOLD = 1000000;

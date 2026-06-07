@@ -62,7 +62,7 @@ function getBootstrapPayload() {
     sheetName: TARGET_SHEET_NAME,
     sheetId: sheet.getSheetId(),
     spreadsheetId: ss.getId(),
-    presetRange: PRESET_RANGE,
+    presetRange: getEffectiveRange_(),
     startRow: snapshot.startRow,
     startCol: snapshot.startCol,
     numRows: snapshot.numRows,
@@ -113,9 +113,9 @@ function pollChanges(lastHash) {
 
 /** Internal: read the whole preset range and compute the state hash. */
 function readSheetSnapshot_(sheet) {
-  // Expand the read range downward beyond PRESET_RANGE so newly-appended
-  // rows beyond the constant are still picked up. Cap at row 999.
-  var declared = sheet.getRange(PRESET_RANGE);
+  // Expand the read range downward beyond the effective range so newly-
+  // appended rows beyond it are still picked up. Cap at row 999.
+  var declared = sheet.getRange(getEffectiveRange_());
   var startRow = declared.getRow();
   var startCol = declared.getColumn();
   var numCols = declared.getNumColumns();
@@ -203,7 +203,7 @@ function isBlank_(v) {
  */
 function writeCellEdit(payload) {
   var sheet = SpreadsheetApp.getActive().getSheetByName(TARGET_SHEET_NAME);
-  var startCol = sheet.getRange(PRESET_RANGE).getColumn();
+  var startCol = sheet.getRange(getEffectiveRange_()).getColumn();
   var colAbs = startCol + payload.groupIndex * COLUMNS_PER_GROUP + payload.colInGroup;
   var cell = sheet.getRange(payload.sheetRow, colAbs);
   var text = (payload.newText === null || payload.newText === undefined) ? '' : String(payload.newText);
@@ -251,7 +251,7 @@ function writeCellEdit(payload) {
  */
 function appendRowToSubpanel(groupIndex) {
   var sheet = SpreadsheetApp.getActive().getSheetByName(TARGET_SHEET_NAME);
-  var declared = sheet.getRange(PRESET_RANGE);
+  var declared = sheet.getRange(getEffectiveRange_());
   var startRow = declared.getRow();
   var startCol = declared.getColumn();
   // Scan up to row 999 for the last row that has content in this group.
@@ -287,7 +287,7 @@ function appendRowToSubpanel(groupIndex) {
  */
 function clearRowInSubpanel(groupIndex, sheetRow) {
   var sheet = SpreadsheetApp.getActive().getSheetByName(TARGET_SHEET_NAME);
-  var startCol = sheet.getRange(PRESET_RANGE).getColumn();
+  var startCol = sheet.getRange(getEffectiveRange_()).getColumn();
   var colStart = startCol + groupIndex * COLUMNS_PER_GROUP;
   sheet.getRange(sheetRow, colStart, 1, COLUMNS_PER_GROUP).clearContent();
   SpreadsheetApp.flush();
@@ -341,6 +341,22 @@ function moveSheetRow(fromRow, toRow) {
 var SETTINGS_KEY_ = 'sankey_settings_v1';
 var LOCKS_KEY_ = 'subpanel_locks_v1';
 var REORDER_ACK_KEY_ = 'reorder_warning_ack_v1';
+
+// Effective-range override. PRESET_RANGE in SankeyRenderer.gs is the default;
+// "+ Add new level" widens the range and persists the new A1 string here.
+// Stored in SCRIPT properties (not user properties) because adding a level is
+// a structural change to the shared sheet, not a per-user preference.
+var RANGE_OVERRIDE_KEY_ = 'effective_range_v1';
+
+/**
+ * The range the webapp currently operates on. Returns the persisted override
+ * if one has been set (and looks like a valid A1 range), else PRESET_RANGE.
+ */
+function getEffectiveRange_() {
+  var stored = PropertiesService.getScriptProperties().getProperty(RANGE_OVERRIDE_KEY_);
+  if (stored && /^[A-Za-z]+\d+:[A-Za-z]+\d+$/.test(stored)) return stored;
+  return PRESET_RANGE;
+}
 
 function getSavedSettings() {
   var raw = PropertiesService.getUserProperties().getProperty(SETTINGS_KEY_);
@@ -410,22 +426,61 @@ function servePrintPage_(token) {
 // =====================  Future expansion seam  =====================
 
 /**
- * Stub for the "+ Add new level" button (bonus goal in Next_Goals.md).
- * Inserts 3 new columns at the end of PRESET_RANGE with a header
- * triplet (Input | <title> | Output) and updates the constant range.
+ * "+ Add new level" button. Appends one column-triplet (Input | <title> |
+ * Output) immediately to the right of the current effective range, seeds the
+ * header row with those three labels, and persists the widened range so all
+ * subsequent loads (and other users) see the new subpanel.
  *
- * Not wired up in the foundational UI — exposed here so the eventual
- * implementation can call this server endpoint directly. To activate:
- *   1. Replace PRESET_RANGE in SankeyRenderer.gs with the new wider
- *      range, OR
- *   2. Have this function write a new range constant elsewhere.
+ * The range constant PRESET_RANGE in SankeyRenderer.gs is NOT edited — the new
+ * width is stored as an override (see getEffectiveRange_). buildSubpanels_
+ * derives subpanel count from range width / COLUMNS_PER_GROUP, so the new
+ * subpanel appears automatically once the range widens.
  *
- * Leaving as a no-op placeholder so the UI button can stay disabled
- * without confusion.
+ * Note: for the default D1:O39 sheet this extends the range to D1:R39, which
+ * spans column Q — the same cell SankeyRenderer's IMAGE_ANCHOR_CELL uses for
+ * the saved PNG. The image floats over cells rather than occupying them, so
+ * data isn't lost, but be aware of the visual overlap if both features are used.
+ *
+ * @param {string} title  Header label for the new subpanel's value column.
+ * @return {Object} { ok, presetRange, subpanels, hash } on success.
  */
 function addNewLevel(title) {
-  // Intentionally unimplemented in v1. See Next_Goals.md bonus.
-  return { ok: false, message: 'Not yet implemented (foundational v1).' };
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName(TARGET_SHEET_NAME);
+  if (!sheet) throw new Error('Sheet "' + TARGET_SHEET_NAME + '" not found.');
+
+  var cleanTitle = String(title == null ? '' : title).trim() || 'New Level';
+
+  var current = sheet.getRange(getEffectiveRange_());
+  var startRow = current.getRow();
+  var startCol = current.getColumn();
+  var numRows = current.getNumRows();
+  var numCols = current.getNumColumns();
+
+  // New triplet sits immediately to the right of the current range.
+  var newInputCol = startCol + numCols;       // Input
+  var newValueCol = newInputCol + 1;          // <title>
+  var newOutputCol = newInputCol + 2;         // Output
+
+  // Seed the header row (Input | <title> | Output), matching the existing
+  // subpanel header convention.
+  sheet.getRange(startRow, newInputCol).setValue('Input');
+  sheet.getRange(startRow, newValueCol).setValue(cleanTitle);
+  sheet.getRange(startRow, newOutputCol).setValue('Output');
+
+  // Persist the widened range (e.g. D1:O39 -> D1:R39).
+  var widened = sheet.getRange(startRow, startCol, numRows, numCols + COLUMNS_PER_GROUP);
+  var newRangeA1 = widened.getA1Notation();
+  PropertiesService.getScriptProperties().setProperty(RANGE_OVERRIDE_KEY_, newRangeA1);
+
+  SpreadsheetApp.flush();
+  var snapshot = readSheetSnapshot_(sheet);
+  return {
+    ok: true,
+    presetRange: newRangeA1,
+    subpanels: buildSubpanels_(snapshot),
+    hash: snapshot.hash
+  };
 }
 
 

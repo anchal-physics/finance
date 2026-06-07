@@ -192,8 +192,8 @@
   <div class="panel-body">
     <div id="subpanels-container"></div>
     <div style="margin-top:12px; padding-top:10px; border-top: 1px dashed #ddd;">
-      <button class="btn ghost sm" id="add-level-btn" disabled title="Bonus goal — not yet implemented in v1">+ Add new level</button>
-      <span style="font-size:11px; color:#999; margin-left:8px;">Foundational: edit columns by changing PRESET_RANGE in SankeyRenderer.gs.</span>
+      <button class="btn ghost sm" id="add-level-btn" title="Append a new Input | title | Output column triplet to the right">+ Add new level</button>
+      <span style="font-size:11px; color:#999; margin-left:8px;">Adds a new subpanel (column triplet) to the right of the last level.</span>
     </div>
   </div>
 </details>
@@ -1103,6 +1103,36 @@ function refreshFromServer() {
 }
 
 document.getElementById('refresh-btn').addEventListener('click', refreshFromServer);
+
+// =====================  Add new level  =====================
+
+document.getElementById('add-level-btn').addEventListener('click', function () {
+  var title = window.prompt('Title for the new level (subpanel header):', 'New Level');
+  if (title === null) return;            // cancelled
+  title = title.trim();
+  if (!title) { toast('A title is required.'); return; }
+  var btn = this;
+  btn.disabled = true;
+  toast('Adding level…');
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      btn.disabled = false;
+      if (!resp || !resp.ok) {
+        toast('Add level failed' + (resp && resp.message ? ': ' + resp.message : '.'));
+        return;
+      }
+      STATE.subpanels = resp.subpanels;
+      STATE.hash = resp.hash;
+      rebuildAllSubpanels();
+      debouncedRender();
+      toast('Added level: ' + title);
+    })
+    .withFailureHandler(function (e) {
+      btn.disabled = false;
+      toast('Add level failed: ' + (e && e.message ? e.message : e));
+    })
+    .addNewLevel(title);
+});
 
 function rebuildAllSubpanels() {
   var host = document.getElementById('subpanels-container');
