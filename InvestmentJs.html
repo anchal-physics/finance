@@ -8,8 +8,8 @@ var INV_INVESTORS = ['Anchal', 'Anamika'];
 
 var INV_DEFAULTS = {
   shared: { palette: 'cat10', pctPrecision: 1 },
-  pie:    { innerRadiusPct: 50, sliceLabels: true, legend: true, width: 1500, height: 1140 },
-  bar:    { color: '#1a73e8', showValues: true, width: 1400, height: 868 }
+  pie:    { innerRadiusPct: 48, sliceLabels: true, width: 1140, height: 900 },
+  bar:    { showValues: true, width: 1140, height: 705 }
 };
 
 var INV = {
@@ -33,6 +33,13 @@ function invShade(hex, amt) {
   var rgb = invHexToRgb(hex), t = amt < 0 ? 0 : 255, p = Math.abs(amt);
   var mix = function (c) { return Math.round((t - c) * p + c); };
   return 'rgb(' + mix(rgb[0]) + ',' + mix(rgb[1]) + ',' + mix(rgb[2]) + ')';
+}
+// true if the fill is dark enough that white label text reads better
+function invIsDark(color) {
+  var r, g, b, m = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(String(color));
+  if (m) { r = +m[1]; g = +m[2]; b = +m[3]; }
+  else { var c = invHexToRgb(color); r = c[0]; g = c[1]; b = c[2]; }
+  return (0.299 * r + 0.587 * g + 0.114 * b) < 145;
 }
 function invFmtPct(frac, prec) { return (Number(frac) * 100).toFixed(prec) + '%'; }
 function invFmtER(erPct, prec) { return Number(erPct).toFixed(prec) + '%'; } // already in % units
@@ -58,65 +65,61 @@ function invDonutPath(cx, cy, rIn, rOut, a0, a1) {
 }
 
 // ---------- Pie chart (SVG inner markup) ----------
+// Self-contained: categories slightly "exploded" outward, each ticker slice
+// labelled INSIDE (symbol + % + $/wk), each category labelled OUTSIDE (name +
+// total %). No side legend. Hover <title> gives the full fund name.
 function invBuildPie(model, s) {
-  var W = 1000, H = 760;
-  var cx = 500, cy = 390, rOut = 300, rIn = Math.round(rOut * (s.pie.innerRadiusPct / 100));
+  var W = 760, H = 600;
+  var cx = 380, cy = 312, rOut = 178, rIn = Math.round(rOut * (s.pie.innerRadiusPct / 100));
+  var explode = 9;
   var pal = invPalette(s.shared.palette), prec = s.shared.pctPrecision;
-  var parts = [];
+  var TWO_PI = Math.PI * 2;
+  var parts = [], labels = [];
 
-  // Title + subtitle (embedded so export includes them)
-  parts.push(invText(cx, 40, model.investor + ' — Investment Allocation', 26, '#1f1f1f', 'middle', 700));
-  parts.push(invText(cx, H - 22, invSubtitle(model), 17, '#555', 'middle', 400));
+  parts.push(invText(cx, 28, model.investor + ': allocation in selected strategy', 21, '#1f1f1f', 'middle', 700));
+  parts.push(invText(cx, H - 14, invSubtitle(model), 13, '#555', 'middle', 400));
 
   if (!model.categories.length) {
-    parts.push(invText(cx, cy, 'No allocation set for ' + model.investor + '.', 16, '#999', 'middle', 400));
+    parts.push(invText(cx, cy, 'No allocation set for ' + model.investor + '.', 15, '#999', 'middle', 400));
     return { width: W, height: H, inner: parts.join('') };
   }
 
-  // Flatten to slices in category order; track boundaries.
-  var ang = -Math.PI; // we draw clockwise starting at top below by using cumulative from 0
-  var cursor = 0; // radians from top, clockwise
-  var TWO_PI = Math.PI * 2;
-  var seps = []; // {a, kind:'ticker'|'cat'}
+  var cursor = 0;
   model.categories.forEach(function (cat, ci) {
+    var a0 = cursor, a1 = cursor + cat.weightPct * TWO_PI, cmid = (a0 + a1) / 2;
+    cursor = a1;
     var base = pal[ci % pal.length];
-    var tickers = cat.tickers.length ? cat.tickers : [{ symbol: cat.name, weightPct: cat.weightPct }];
-    tickers.forEach(function (tk, ti) {
-      var a0 = cursor, a1 = cursor + tk.weightPct * TWO_PI;
-      var shadeAmt = tickers.length > 1 ? (-0.18 + (ti / Math.max(1, tickers.length - 1)) * 0.42) : 0;
+    // explode this category's whole wedge outward along its bisector
+    var ecx = cx + Math.sin(cmid) * explode, ecy = cy - Math.cos(cmid) * explode;
+    var n = cat.tickers.length, tcur = a0;
+    cat.tickers.forEach(function (tk, ti) {
+      var t0 = tcur, t1 = tcur + tk.weightPct * TWO_PI, tmid = (t0 + t1) / 2;
+      tcur = t1;
+      var shadeAmt = n > 1 ? (-0.16 + (ti / Math.max(1, n - 1)) * 0.40) : 0.04;
       var fill = invShade(base, shadeAmt);
-      parts.push('<path d="' + invDonutPath(cx, cy, rIn, rOut, a0, a1) + '" fill="' + fill +
-                 '" stroke="#fff" stroke-width="0.75"></path>');
-      if (ti > 0) seps.push({ a: a0, kind: 'ticker' });
-      cursor = a1;
+      var tip = tk.symbol + (tk.name ? ' — ' + tk.name : '') + '\n' +
+                invFmtPct(tk.weightPct, prec) + ' · ' + invFmtMoney(tk.weekly) + '/wk\n' + cat.name;
+      parts.push('<path d="' + invDonutPath(ecx, ecy, rIn, rOut, t0, t1) + '" fill="' + fill +
+                 '" stroke="#fff" stroke-width="1.25"><title>' + escapeHtml(tip) + '</title></path>');
+      // INSIDE ticker label (drawn on top, after all slices)
+      if (s.pie.sliceLabels && (t1 - t0) > 0.05) {
+        var p = invPolar(ecx, ecy, (rIn + rOut) / 2, tmid);
+        var col = invIsDark(fill) ? '#fff' : '#222';
+        labels.push(invText(p[0], p[1] - 2, tk.symbol, 12, col, 'middle', 700));
+        labels.push(invText(p[0], p[1] + 11, invFmtPct(tk.weightPct, prec) + ' · ' + invFmtMoney(tk.weekly), 9.5, col, 'middle', 400));
+      }
     });
-    seps.push({ a: cursor, kind: 'cat' });
-  });
-
-  // Separator lines: dotted between tickers, solid between categories.
-  seps.forEach(function (sp) {
-    var pi = invPolar(cx, cy, rIn, sp.a), po = invPolar(cx, cy, rOut, sp.a);
-    if (sp.kind === 'ticker') {
-      parts.push('<line x1="' + pi[0].toFixed(2) + '" y1="' + pi[1].toFixed(2) + '" x2="' + po[0].toFixed(2) +
-                 '" y2="' + po[1].toFixed(2) + '" stroke="#ffffff" stroke-width="1.2" stroke-dasharray="3,3"></line>');
-    } else {
-      parts.push('<line x1="' + pi[0].toFixed(2) + '" y1="' + pi[1].toFixed(2) + '" x2="' + po[0].toFixed(2) +
-                 '" y2="' + po[1].toFixed(2) + '" stroke="#ffffff" stroke-width="2.4"></line>');
+    // OUTSIDE category label (name + total %)
+    if (s.pie.sliceLabels) {
+      var lp = invPolar(ecx, ecy, rOut + 14, cmid);
+      var anchor = Math.sin(cmid) >= -0.05 ? 'start' : 'end';
+      var lx = lp[0] + (anchor === 'start' ? 3 : -3);
+      labels.push(invText(lx, lp[1] - 1, cat.name, 12.5, '#333', anchor, 700));
+      labels.push(invText(lx, lp[1] + 13, invFmtPct(cat.weightPct, prec) + ' · ' + invFmtMoney(cat.weekly) + '/wk', 10.5, '#666', anchor, 400));
     }
   });
 
-  // Category % labels on the ring (skip tiny slices to avoid clutter).
-  if (s.pie.sliceLabels) {
-    cursor = 0;
-    model.categories.forEach(function (cat) {
-      var a0 = cursor, a1 = cursor + cat.weightPct * TWO_PI, mid = (a0 + a1) / 2;
-      cursor = a1;
-      if (cat.weightPct < 0.04) return;
-      var rmid = (rIn + rOut) / 2, p = invPolar(cx, cy, rmid, mid);
-      parts.push(invText(p[0], p[1] + 5, invFmtPct(cat.weightPct, prec), 16, '#fff', 'middle', 700));
-    });
-  }
-  return { width: W, height: H, inner: parts.join('') };
+  return { width: W, height: H, inner: parts.join('') + labels.join('') };
 }
 
 function invText(x, y, str, size, fill, anchor, weight) {
@@ -125,38 +128,12 @@ function invText(x, y, str, size, fill, anchor, weight) {
          '" font-weight="' + (weight || 400) + '">' + escapeHtml(str) + '</text>';
 }
 
-// ---------- Pie legend (HTML, beside the chart) ----------
-function invBuildLegend(model, s) {
-  var pal = invPalette(s.shared.palette), prec = s.shared.pctPrecision;
-  if (!model.categories.length) return '<div class="chart-empty">No allocation.</div>';
-  var html = '';
-  model.categories.forEach(function (cat, ci) {
-    var base = pal[ci % pal.length];
-    html += '<div class="legend-cat"><div class="legend-cat-head">' +
-            '<span class="swatch" style="background:' + base + '"></span>' +
-            '<span>' + escapeHtml(cat.name) + '</span>' +
-            '<span class="pct">' + invFmtPct(cat.weightPct, prec) + '</span>' +
-            '<span class="amt">' + invFmtMoney(cat.weekly) + '/wk</span></div>';
-    var n = cat.tickers.length;
-    cat.tickers.forEach(function (tk, ti) {
-      var shadeAmt = n > 1 ? (-0.18 + (ti / Math.max(1, n - 1)) * 0.42) : 0;
-      html += '<div class="legend-ticker">' +
-              '<span class="swatch" style="background:' + invShade(base, shadeAmt) + '"></span>' +
-              '<span class="sym">' + escapeHtml(tk.symbol) + '</span>' +
-              '<span class="nm">' + escapeHtml(tk.name || '') + '</span>' +
-              '<span class="pct">' + invFmtPct(tk.weightPct, prec) + '</span>' +
-              '<span class="amt">' + invFmtMoney(tk.weekly) + '/wk</span></div>';
-    });
-    html += '</div>';
-  });
-  return html;
-}
-
 // ---------- Bar chart (SVG inner markup) ----------
 function invBuildBar(model, s) {
-  var W = 1000, H = 620, padL = 70, padR = 30, padT = 78, padB = 120;
+  var W = 760, H = 470, padL = 56, padR = 24, padT = 62, padB = 60;
   var plotW = W - padL - padR, plotH = H - padT - padB;
   var prec = s.shared.pctPrecision;
+  var pal = invPalette(s.shared.palette);
   var data = [
     ['6 mo', model.weightedReturns.m6], ['1 yr', model.weightedReturns.y1],
     ['3 yr', model.weightedReturns.y3], ['5 yr', model.weightedReturns.y5]
@@ -165,29 +142,30 @@ function invBuildBar(model, s) {
   var maxV = Math.max.apply(null, vals.concat([0]));
   var minV = Math.min.apply(null, vals.concat([0]));
   if (maxV === minV) maxV += 0.01;
-  var pad = (maxV - minV) * 0.12; maxV += pad; if (minV < 0) minV -= pad;
+  var pad = (maxV - minV) * 0.14; maxV += pad; if (minV < 0) minV -= pad;
   var scaleY = function (v) { return padT + plotH * (maxV - v) / (maxV - minV); };
   var zeroY = scaleY(0);
   var parts = [];
-  parts.push(invText(W / 2, 38, model.investor + ' — Historical Growth (strategy-weighted)', 24, '#1f1f1f', 'middle', 700));
-  parts.push(invText(W / 2, 62, invSubtitle(model), 16, '#555', 'middle', 400));
-  // zero axis
+  parts.push(invText(W / 2, 30, model.investor + ': Historical growth in selected strategy', 19, '#1f1f1f', 'middle', 700));
+  parts.push(invText(W / 2, 50, invSubtitle(model), 13, '#555', 'middle', 400));
   parts.push('<line x1="' + padL + '" y1="' + zeroY.toFixed(1) + '" x2="' + (W - padR) +
              '" y2="' + zeroY.toFixed(1) + '" stroke="#ccc" stroke-width="1"></line>');
-  var slot = plotW / data.length, bw = slot * 0.56;
+  var slot = plotW / data.length, bw = slot * 0.5;
   data.forEach(function (d, i) {
     var v = d[1], x = padL + slot * i + (slot - bw) / 2;
     var yTop = scaleY(Math.max(0, v)), yBot = scaleY(Math.min(0, v));
     var h = Math.max(1, yBot - yTop);
+    var color = pal[i % pal.length];
+    var tip = d[0] + ' return: ' + invFmtPct(v, prec) + '  (strategy-weighted, total over the period)';
     parts.push('<rect x="' + x.toFixed(1) + '" y="' + yTop.toFixed(1) + '" width="' + bw.toFixed(1) +
-               '" height="' + h.toFixed(1) + '" rx="3" fill="' + s.bar.color + '"></rect>');
+               '" height="' + h.toFixed(1) + '" rx="3" fill="' + color + '"><title>' + escapeHtml(tip) + '</title></rect>');
     if (s.bar.showValues) {
-      var ly = v >= 0 ? yTop - 8 : yBot + 20;
-      parts.push(invText(x + bw / 2, ly, invFmtPct(v, prec), 16, '#333', 'middle', 600));
+      var ly = v >= 0 ? yTop - 7 : yBot + 16;
+      parts.push(invText(x + bw / 2, ly, invFmtPct(v, prec), 14, '#333', 'middle', 600));
     }
-    parts.push(invText(x + bw / 2, H - padB + 30, d[0], 17, '#444', 'middle', 600));
+    parts.push(invText(x + bw / 2, H - padB + 24, d[0], 15, '#444', 'middle', 600));
   });
-  parts.push(invText(W / 2, H - 18, 'Total return over each horizon (not annualized).', 13, '#999', 'middle', 400));
+  parts.push(invText(W / 2, H - 12, 'Total return over each horizon (not annualized).', 12, '#999', 'middle', 400));
   return { width: W, height: H, inner: parts.join('') };
 }
 
@@ -202,8 +180,6 @@ function invRenderCharts(investor) {
   if (!st.model) return;
   var s = st.settings;
   invApplySvg(document.getElementById('inv-pie-' + investor), invBuildPie(st.model, s));
-  document.getElementById('inv-pie-legend-' + investor).innerHTML =
-    s.pie.legend ? invBuildLegend(st.model, s) : '';
   invApplySvg(document.getElementById('inv-bar-' + investor), invBuildBar(st.model, s));
 }
 
@@ -219,14 +195,12 @@ function invSettingsHtml(investor) {
     '<div style="font-weight:600;margin:12px 0 6px;">Pie</div>' +
     '<div class="settings-grid">' +
       '<div class="setting-row"><label>Inner radius (%)</label><input type="number" min="0" max="90" data-s="pie.innerRadiusPct"></div>' +
-      '<div class="setting-row"><label>Slice % labels</label><input type="checkbox" data-s="pie.sliceLabels"></div>' +
-      '<div class="setting-row"><label>Show legend</label><input type="checkbox" data-s="pie.legend"></div>' +
+      '<div class="setting-row"><label>Show labels</label><input type="checkbox" data-s="pie.sliceLabels"></div>' +
       '<div class="setting-row"><label>Export width</label><input type="number" min="200" data-s="pie.width"></div>' +
       '<div class="setting-row"><label>Export height</label><input type="number" min="200" data-s="pie.height"></div>' +
     '</div>' +
     '<div style="font-weight:600;margin:12px 0 6px;">Bar</div>' +
     '<div class="settings-grid">' +
-      '<div class="setting-row"><label>Bar color</label><input type="color" data-s="bar.color"></div>' +
       '<div class="setting-row"><label>Show values</label><input type="checkbox" data-s="bar.showValues"></div>' +
       '<div class="setting-row"><label>Export width</label><input type="number" min="200" data-s="bar.width"></div>' +
       '<div class="setting-row"><label>Export height</label><input type="number" min="200" data-s="bar.height"></div>' +
@@ -417,10 +391,7 @@ function invPageHtml(investor) {
         '<button class="btn ghost sm" data-x="' + investor + '|pie|png">PNG</button>' +
         '<button class="btn ghost sm" data-x="' + investor + '|pie|pdf">PDF</button>' +
       '</span></summary>' +
-      '<div class="panel-body"><div class="chart-layout">' +
-        '<div class="chart-wrap"><svg id="inv-pie-' + investor + '" class="chart-svg"></svg></div>' +
-        '<div class="pie-legend" id="inv-pie-legend-' + investor + '"></div>' +
-      '</div></div></details>' +
+      '<div class="panel-body"><div class="chart-wrap"><svg id="inv-pie-' + investor + '" class="chart-svg"></svg></div></div></details>' +
     '<details class="panel" open><summary>Historical growth rate' +
       '<span class="chart-toolbar">' +
         '<button class="btn ghost sm" data-x="' + investor + '|bar|png">PNG</button>' +
@@ -493,8 +464,8 @@ function invActivatePage(page) {
   document.getElementById('tabs').classList.remove('open');
   document.getElementById('hamburger').setAttribute('aria-expanded', 'false');
   document.getElementById('sankey-export').style.display = (page === 'sankey') ? 'inline-flex' : 'none';
-  var titles = { sankey: 'PayrollSankey', anchal: 'Anchal — Investments', anamika: 'Anamika — Investments' };
-  document.getElementById('page-title').textContent = titles[page] || 'PayrollSankey';
+  var titles = { sankey: '· Payroll Sankey', anchal: '· Anchal Investment Strategy', anamika: '· Anamika Investment Strategy' };
+  document.getElementById('page-title').textContent = titles[page] || '· Payroll Sankey';
 
   if (page === 'anchal' || page === 'anamika') {
     var investor = page === 'anchal' ? 'Anchal' : 'Anamika';

@@ -124,6 +124,18 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 | `DEPLOY.md` | Detailed deployment doc with clasp and manual paths. | yes |
 | `Next_Goals.md` | User's original spec for the web app. Historical context — the bonus goal "Add new level" button is still a stub. | yes |
 | `Finance.xlsx` | Local snapshot of the workbook (gitignored). May or may not be present. **Never commit.** | gitignored |
+| `logo/*.png` | Brand logo source art (Capuchin monkey in a dark-green circle). Source only — clasp doesn't push PNGs (and `.claspignore` excludes `logo/**`). | yes |
+
+> **Branding — "Capuchin".** The app is branded *Capuchin* (a personal-finance
+> manager). The brand name + a round logo emblem show in the topbar on every
+> tab; the document/web-app title is "Capuchin". The logo emblem is the green
+> circle cropped from `logo/Logo_Candidate_3.png` (`magick … -crop 700x700+354+34 -resize 96x96`), and
+> **embedded as a base64 data URI** in the `.brand-logo` CSS rule in
+> `Styles.html` (no external file fetch). To change the logo: re-crop/resize
+> with ImageMagick, base64-encode, and replace the data URI in that rule.
+> **Theme color** is the logo's dark green `#2D4C36` (hover `#22452D`), which
+> replaced the old blue `#1a73e8` throughout `Styles.html`; page background is a
+> soft cream `#f1f3ec` echoing the logo field.
 
 ---
 

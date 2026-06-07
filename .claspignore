@@ -7,6 +7,9 @@
 node_modules/**
 *.xlsx
 *.md
+*.png
+logo/**
+error_message.txt
 .clasp.json
 .clasprc.json
 .claspignore

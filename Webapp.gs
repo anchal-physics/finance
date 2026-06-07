@@ -23,7 +23,7 @@ function doGet(e) {
   var tmpl = HtmlService.createTemplateFromFile('WebappPage');
   tmpl.bootstrap = JSON.stringify(getBootstrapPayload());
   return tmpl.evaluate()
-    .setTitle('PayrollSankey')
+    .setTitle('Capuchin')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -114,7 +114,7 @@ function servePrintPage_(token) {
   var tmpl = HtmlService.createTemplateFromFile('PrintPage');
   tmpl.svgContent = svg || '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200"><text x="50%" y="50%" text-anchor="middle" font-family="Arial" font-size="20" fill="#999">Print token expired — reopen from the webapp.</text></svg>';
   return tmpl.evaluate()
-    .setTitle('PayrollSankey — Print')
+    .setTitle('Capuchin — Print')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }

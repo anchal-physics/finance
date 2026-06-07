@@ -3,7 +3,7 @@
 <head>
 <base target="_top">
 <meta charset="utf-8">
-<title>PayrollSankey</title>
+<title>Capuchin</title>
 <?!= include('Styles') ?>
 </head>
 <body>
@@ -11,7 +11,8 @@
 <div class="topbar">
   <div style="display:flex; align-items:center; gap:6px;">
     <button class="hamburger" id="hamburger" aria-label="Menu" aria-expanded="false">☰</button>
-    <h1 id="page-title">PayrollSankey</h1>
+    <span class="brand-logo" role="img" aria-label="Capuchin logo"></span>
+    <h1 style="margin:0; color:#2d4c36;">Capuchin <span id="page-title" style="font-weight:400; color:#8a8f98; font-size:14px;">· Payroll Sankey</span></h1>
   </div>
   <div style="display:flex; gap:8px; align-items:center;">
     <span class="who" id="whoami"></span>
@@ -26,9 +27,9 @@
 </div>
 
 <nav class="tabs" id="tabs">
-  <button class="tab active" data-page="sankey">PayrollSankey</button>
-  <button class="tab" data-page="anchal">Anchal</button>
-  <button class="tab" data-page="anamika">Anamika</button>
+  <button class="tab active" data-page="sankey">Payroll Sankey</button>
+  <button class="tab" data-page="anchal">Anchal Investment Strategy</button>
+  <button class="tab" data-page="anamika">Anamika Investment Strategy</button>
 </nav>
 
 
