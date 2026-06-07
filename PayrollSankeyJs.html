@@ -1,0 +1,925 @@
+// =====================  Sankey parser (mirror SankeyRenderer.gs)  =====================
+
+var LINE_RE = /^(.*?)\s*\[\s*([0-9,.?]+|\([0-9.+\-*\/()\s]+\))\s*([\$€£₽¥])?\s*\]\s*(.+?)(?:\s*\[(.+?)\])?\s*$/;
+
+function isCommentOrBlank(s) {
+  var t = String(s || '').trim();
+  if (t === '') return true;
+  if (t.indexOf('//') === 0) return true;
+  if (t.charAt(0) === "'") return true;
+  return false;
+}
+function evaluateMath(expr) {
+  if (!/^[-+*/().\d\s]+$/.test(expr)) return NaN;
+  try { return Function('"use strict";return (' + expr + ')')(); } catch (e) { return NaN; }
+}
+function firstWordOf(s) { var m = /\b(\w+)\b/.exec(String(s || '')); return m ? m[1] : String(s || ''); }
+
+function parseSankeyText(text) {
+  var rawLines = String(text || '').split(/\r?\n/);
+  var entries = [];
+  for (var i = 0; i < rawLines.length; i++) {
+    var line = rawLines[i];
+    if (isCommentOrBlank(line)) continue;
+    var m = LINE_RE.exec(line);
+    if (!m) continue;
+    var source = m[1].trim();
+    var rawVal = m[2].trim();
+    var target = m[4].trim();
+    var color = m[5] ? m[5].trim() : null;
+    if (!source || !target) continue;
+    var value = null;
+    if (rawVal === '?') value = null;
+    else if (rawVal.charAt(0) === '(') {
+      var ev = evaluateMath(rawVal);
+      value = isNaN(ev) ? 0 : ev;
+    } else {
+      var n = parseFloat(rawVal.replace(/,/g, ''));
+      value = isNaN(n) ? 0 : n;
+    }
+    entries.push({source: source, target: target, value: value, color: color, line: i + 1});
+  }
+  // Resolve [?]
+  for (var p = 0; p < 10; p++) {
+    var changed = false;
+    for (var k = 0; k < entries.length; k++) {
+      var e = entries[k];
+      if (e.value !== null) continue;
+      var inAll = 0, inAuto = false, outOther = 0, outAuto = false;
+      for (var j = 0; j < entries.length; j++) {
+        if (j === k) continue;
+        var f = entries[j];
+        if (f.target === e.target) { if (f.value === null) inAuto = true; else inAll += f.value; }
+        if (f.source === e.target) { if (f.value === null) outAuto = true; else outOther += f.value; }
+      }
+      if (!inAuto && !outAuto && inAll > 0) { e.value = Math.max(0, inAll - outOther); changed = true; }
+    }
+    if (!changed) break;
+  }
+  entries = entries.filter(function (e) { return e.value !== null && e.value > 0; });
+  var nodes = [], idx = {};
+  function add(name) { if (idx[name] === undefined) { idx[name] = nodes.length; nodes.push({name: name}); } return idx[name]; }
+  var links = entries.map(function (e) { return { source: add(e.source), target: add(e.target), value: e.value, color: e.color, line: e.line }; });
+  return { nodes: nodes, links: links };
+}
+
+// =====================  Build Sankey text from subpanel state  =====================
+
+/**
+ * Walk every subpanel (in column order) and emit
+ * SOURCE    [VALUE]    TARGET lines per row that has all three.
+ * This mirrors convertToSankeyFormat in SankeyRenderer.gs but runs on
+ * the live in-memory subpanel state (including unsaved edits), so the
+ * diagram reacts instantly to typing without a sheet round-trip.
+ */
+function buildSankeyTextFromState() {
+  var lines = [];
+  for (var g = 0; g < STATE.subpanels.length; g++) {
+    var sp = STATE.subpanels[g];
+    var setLines = [];
+    var seen = {};
+    for (var r = 0; r < sp.rows.length; r++) {
+      var row = sp.rows[r];
+      var src = displayOrEdit(g, row.sheetRow, 0, row.input);
+      var val = displayOrEdit(g, row.sheetRow, 1, row.value);
+      var tgt = displayOrEdit(g, row.sheetRow, 2, row.output);
+      var srcStr = cleanText(src);
+      var tgtStr = cleanText(tgt);
+      var valStr = cleanValueForSankey(val);
+      if (srcStr && tgtStr && valStr && valStr !== '0') {
+        var line = srcStr + '    [' + valStr + ']    ' + tgtStr;
+        if (!seen[line]) { seen[line] = true; setLines.push(line); }
+      }
+    }
+    if (setLines.length) {
+      if (lines.length) lines.push('');
+      lines = lines.concat(setLines);
+    }
+  }
+  return lines.join('\n');
+}
+
+/** If there's an unsaved edit for this cell, prefer that — else use the
+ *  display value the server sent. This is what keeps the diagram live
+ *  while edits are still in the debounce window. */
+function displayOrEdit(g, sheetRow, colInGroup, cell) {
+  var key = g + ':' + sheetRow + ':' + colInGroup;
+  if (STATE.unsaved.hasOwnProperty(key)) {
+    var t = STATE.unsaved[key];
+    // If user entered a formula, we cannot compute it client-side reliably.
+    // Fall back to the previous computed display value.
+    if (String(t).charAt(0) === '=') return cell.display || '';
+    return t;
+  }
+  return cell.display || '';
+}
+
+function cleanText(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).trim().replace(/\t/g, '    ');
+}
+function cleanValueForSankey(v) {
+  if (v === null || v === undefined || v === '') return '0';
+  var s = String(v).replace(/[\$,]/g, '').replace(/\t/g, ' ').trim();
+  var n = parseFloat(s);
+  if (isNaN(n)) return '0';
+  return String(Math.round(n));
+}
+
+// =====================  Settings  =====================
+
+var SETTING_IDS = ["precision","hidezeros","separators","prefix","suffix","hidenumbers",
+  "colorscheme","flow-opacity","firstword","colornodes","nodewidth","nodepadding",
+  "labelplacement","labelbg","sortbyline","canvaswidth","canvasheight","fontsize","nodealign"];
+
+function readSettings() {
+  function $(id) { return document.getElementById(id); }
+  return {
+    precision: $("precision").value,
+    hidezeros: $("hidezeros").checked,
+    separators: $("separators").checked,
+    prefix: $("prefix").value,
+    suffix: $("suffix").value,
+    hidenumbers: $("hidenumbers").checked,
+    colorscheme: $("colorscheme").value,
+    flowOpacity: parseInt($("flow-opacity").value, 10),
+    firstword: $("firstword").checked,
+    colornodes: $("colornodes").checked,
+    nodewidth: parseInt($("nodewidth").value, 10),
+    nodepadding: parseInt($("nodepadding").value, 10),
+    labelplacement: $("labelplacement").value,
+    labelbg: parseInt($("labelbg").value, 10),
+    sortbyline: $("sortbyline").checked,
+    canvasWidth: parseInt($("canvaswidth").value, 10),
+    canvasHeight: parseInt($("canvasheight").value, 10),
+    fontSize: parseInt($("fontsize").value, 10),
+    nodealign: $("nodealign").value
+  };
+}
+
+function applySettingsToUi(s) {
+  if (!s) return;
+  function $(id) { return document.getElementById(id); }
+  function setIf(id, prop, val) { if (val !== undefined && val !== null && $(id)) $(id)[prop] = val; }
+  setIf("precision","value", s.precision);
+  setIf("hidezeros","checked", s.hidezeros);
+  setIf("separators","checked", s.separators);
+  setIf("prefix","value", s.prefix);
+  setIf("suffix","value", s.suffix);
+  setIf("hidenumbers","checked", s.hidenumbers);
+  setIf("colorscheme","value", s.colorscheme);
+  setIf("flow-opacity","value", s.flowOpacity);
+  setIf("firstword","checked", s.firstword);
+  setIf("colornodes","checked", s.colornodes);
+  setIf("nodewidth","value", s.nodewidth);
+  setIf("nodepadding","value", s.nodepadding);
+  setIf("labelplacement","value", s.labelplacement);
+  setIf("labelbg","value", s.labelbg);
+  setIf("sortbyline","checked", s.sortbyline);
+  setIf("canvaswidth","value", s.canvasWidth);
+  setIf("canvasheight","value", s.canvasHeight);
+  setIf("fontsize","value", s.fontSize);
+  setIf("nodealign","value", s.nodealign);
+}
+
+function applyCssVars(s) {
+  var root = document.documentElement;
+  root.style.setProperty("--node-width", s.nodewidth + "px");
+  root.style.setProperty("--node-font-size", s.fontSize + "px");
+  root.style.setProperty("--node-text-background-opacity", (s.labelbg / 100));
+  root.style.setProperty("--flow-opacity", (s.flowOpacity / 100));
+}
+
+function formatValue(v, s) {
+  if (s.hidenumbers) return '';
+  var precision = Math.max(0, Math.min(15, parseInt(s.precision, 10) || 0));
+  var str = Number(v).toFixed(precision);
+  if (v !== 0 && parseFloat(str) === 0) {
+    for (var p = precision + 1; p <= 15; p++) { str = Number(v).toFixed(p); if (parseFloat(str) !== 0) break; }
+  }
+  if (s.hidezeros && str.indexOf('.') !== -1) str = str.replace(/\.?0+$/, '');
+  if (s.separators) { var parts = str.split('.'); parts[0] = Number(parts[0]).toLocaleString('en-US'); str = parts.join('.'); }
+  return (s.prefix || '') + str + (s.suffix || '');
+}
+
+function persistSettings() {
+  var s = readSettings();
+  google.script.run.saveSettings(JSON.stringify(s));
+}
+
+// =====================  Sankey renderer (mirror SankeyRenderer.gs)  =====================
+
+function renderSankey() {
+  var s = readSettings();
+  applyCssVars(s);
+  var text = buildSankeyTextFromState();
+  var parsed = parseSankeyText(text);
+
+  var svg = d3.select('#sankey-svg');
+  svg.attr('viewBox', '0 0 ' + s.canvasWidth + ' ' + s.canvasHeight);
+  svg.selectAll('*').remove();
+
+  if (!parsed.nodes.length) {
+    document.getElementById('render-status').textContent = 'No flows yet. Add data in the editor panel below.';
+    return;
+  }
+
+  svg.append('rect').attr('x', 0).attr('y', 0).attr('width', s.canvasWidth).attr('height', s.canvasHeight).attr('fill', 'white');
+
+  var alignFn = d3.sankeyJustify;
+  if (s.nodealign === 'left') alignFn = d3.sankeyLeft;
+  else if (s.nodealign === 'right') alignFn = d3.sankeyRight;
+  else if (s.nodealign === 'center') alignFn = d3.sankeyCenter;
+
+  var sankey = d3.sankey()
+    .nodeWidth(Math.max(1, s.nodewidth))
+    .nodePadding(Math.max(0, s.nodepadding))
+    .nodeAlign(alignFn)
+    .extent([[10, 10], [s.canvasWidth - 60, s.canvasHeight - 10]]);
+
+  if (s.sortbyline) {
+    sankey.nodeSort(function (a, b) { return (a.__firstLine || 0) - (b.__firstLine || 0); });
+  }
+  var firstLineByName = {};
+  parsed.links.forEach(function (l) {
+    var sName = parsed.nodes[l.source].name;
+    var tName = parsed.nodes[l.target].name;
+    if (firstLineByName[sName] === undefined || l.line < firstLineByName[sName]) firstLineByName[sName] = l.line;
+    if (firstLineByName[tName] === undefined || l.line < firstLineByName[tName]) firstLineByName[tName] = l.line;
+  });
+  parsed.nodes.forEach(function (n) { n.__firstLine = firstLineByName[n.name] || 0; });
+
+  var graph;
+  try {
+    graph = sankey({
+      nodes: parsed.nodes.map(function (n) { return Object.assign({}, n); }),
+      links: parsed.links.map(function (l) { return Object.assign({}, l); })
+    });
+  } catch (err) {
+    document.getElementById('render-status').textContent = 'Layout error: ' + err.message;
+    return;
+  }
+
+  var palette = PALETTES[s.colorscheme] || PALETTES['default'];
+  var color = d3.scaleOrdinal(palette);
+  function colorKey(name) { return s.firstword ? firstWordOf(name) : name; }
+
+  var linksG = svg.append('g').attr('class', 'links');
+  linksG.selectAll('path').data(graph.links).enter().append('path')
+    .attr('d', d3.sankeyLinkHorizontal())
+    .attr('stroke', function (d) { return d.color ? d.color : color(colorKey(d.source.name)); })
+    .attr('stroke-width', function (d) { return Math.max(2.5, d.width); })
+    .attr('fill', 'none')
+    .append('title').text(function (d) { return d.source.name + ' → ' + d.target.name + ': ' + formatValue(d.value, s); });
+
+  var nodesG = svg.append('g').attr('class', 'nodes');
+  var nodeG = nodesG.selectAll('g').data(graph.nodes).enter().append('g');
+  nodeG.append('rect')
+    .attr('x', function (d) { return d.x0; }).attr('y', function (d) { return d.y0; })
+    .attr('width', function (d) { return d.x1 - d.x0; })
+    .attr('height', function (d) { return Math.max(1, d.y1 - d.y0); })
+    .attr('fill', function (d) { return s.colornodes ? color(colorKey(d.name)) : '#888'; })
+    .append('title').text(function (d) { return d.name + ': ' + formatValue(d.value, s); });
+
+  function label(d) { return s.hidenumbers ? d.name : (d.name + ' — ' + formatValue(d.value, s)); }
+  var midX = s.canvasWidth / 2;
+  nodeG.append('text').attr('dy', '0.35em').text(label).each(function (d) {
+    var sel = d3.select(this);
+    var mid = (d.y0 + d.y1) / 2;
+    if (s.labelplacement === 'above') sel.attr('x', (d.x0 + d.x1) / 2).attr('y', d.y0 - 6).attr('text-anchor', 'middle');
+    else if (s.labelplacement === 'inside') sel.attr('x', (d.x0 + d.x1) / 2).attr('y', mid).attr('text-anchor', 'middle');
+    else if (d.x0 < midX) sel.attr('x', d.x1 + 6).attr('y', mid).attr('text-anchor', 'start');
+    else sel.attr('x', d.x0 - 6).attr('y', mid).attr('text-anchor', 'end');
+  });
+
+  if (s.labelbg > 0) {
+    nodeG.each(function () {
+      var g = d3.select(this);
+      var txt = g.select('text');
+      if (txt.empty()) return;
+      var bbox; try { bbox = txt.node().getBBox(); } catch (e) { return; }
+      g.insert('rect', 'text').attr('class', 'label-bg')
+        .attr('x', bbox.x - 3).attr('y', bbox.y - 1).attr('width', bbox.width + 6).attr('height', bbox.height + 2);
+    });
+  }
+
+  document.getElementById('render-status').textContent =
+    graph.nodes.length + ' nodes, ' + graph.links.length + ' flows.';
+}
+
+// =====================  Editor: subpanel rendering  =====================
+
+/**
+ * MODULAR subpanel renderer. Future "+ Add new level" only needs to
+ * call this once with a new groupIndex / columnStart / title.
+ */
+function renderSubpanel(subpanel, isLast) {
+  var container = document.createElement('details');
+  container.className = 'subpanel';
+  container.dataset.group = subpanel.groupIndex;
+
+  var summary = document.createElement('summary');
+  summary.innerHTML =
+    '<span>' + escapeHtml(subpanel.title) + '</span>' +
+    '<span class="subpanel-meta"><span class="row-count">' + subpanel.rows.length + ' rows</span>' +
+    '<button class="lock-toggle" title="Toggle read-only" data-group="' + subpanel.groupIndex + '">' +
+      (STATE.locks[String(subpanel.groupIndex)] ? '🔒' : '🔓') +
+    '</button></span>';
+  container.appendChild(summary);
+
+  var body = document.createElement('div');
+  body.className = 'subpanel-body';
+
+  // Header row (just labels — visible on desktop, hidden on mobile)
+  var header = document.createElement('div');
+  header.className = 'row-grid';
+  header.innerHTML =
+    '<div class="col-head"></div>' +
+    '<div class="col-head">Input (source)</div>' +
+    '<div class="col-head">Value</div>' +
+    '<div class="col-head">Output (target)</div>' +
+    '<div class="col-head"></div>';
+  body.appendChild(header);
+
+  var rowsHost = document.createElement('div');
+  rowsHost.className = 'rows-host';
+  rowsHost.dataset.group = subpanel.groupIndex;
+  if (subpanel.rows.length === 0) {
+    // Empty subpanel — render a single blank editable row
+    var blank = makeRowElement(subpanel.groupIndex, makeBlankRow(null), subpanel, isLast);
+    rowsHost.appendChild(blank);
+  } else {
+    subpanel.rows.forEach(function (row) {
+      rowsHost.appendChild(makeRowElement(subpanel.groupIndex, row, subpanel, isLast));
+    });
+  }
+  body.appendChild(rowsHost);
+
+  var addBtn = document.createElement('button');
+  addBtn.className = 'btn ghost sm add-row-btn';
+  addBtn.textContent = '+ Add row';
+  addBtn.addEventListener('click', function () { onAddRow(subpanel.groupIndex); });
+  body.appendChild(addBtn);
+
+  container.appendChild(body);
+  return container;
+}
+
+function makeBlankRow(sheetRow) {
+  return {
+    sheetRow: sheetRow, // null until first edit
+    input: { display: '', formula: '', raw: '' },
+    value: { display: '', formula: '', raw: '' },
+    output: { display: '', formula: '', raw: '' }
+  };
+}
+
+function makeRowElement(groupIndex, row, subpanel, isLast) {
+  var locked = !!STATE.locks[String(groupIndex)];
+  var grid = document.createElement('div');
+  grid.className = 'row-grid';
+  grid.dataset.sheetRow = row.sheetRow == null ? '' : row.sheetRow;
+  grid.dataset.group = groupIndex;
+  grid.draggable = !locked && row.sheetRow != null;
+
+  var handle = document.createElement('div');
+  handle.className = 'drag-handle';
+  handle.textContent = locked ? '·' : '⋮⋮';
+  handle.title = locked ? 'Locked' : 'Drag to reorder (moves entire spreadsheet row)';
+  grid.appendChild(handle);
+
+  grid.appendChild(makeCell(groupIndex, row.sheetRow, 0, row.input, 'input-cell', subpanel, isLast));
+  grid.appendChild(makeCell(groupIndex, row.sheetRow, 1, row.value, 'value-cell', subpanel, isLast));
+  grid.appendChild(makeCell(groupIndex, row.sheetRow, 2, row.output, 'output-cell', subpanel, isLast));
+
+  var del = document.createElement('button');
+  del.className = 'delete-btn';
+  del.title = 'Delete this row (clears 3 cells in this subpanel only)';
+  del.innerHTML = '×';
+  del.disabled = locked;
+  del.addEventListener('click', function () { onDeleteRow(groupIndex, row.sheetRow); });
+  grid.appendChild(del);
+
+  // Drag events
+  if (!locked && row.sheetRow != null) {
+    grid.addEventListener('dragstart', onDragStart);
+    grid.addEventListener('dragover', onDragOver);
+    grid.addEventListener('dragleave', onDragLeave);
+    grid.addEventListener('drop', onDrop);
+    grid.addEventListener('dragend', onDragEnd);
+  }
+
+  return grid;
+}
+
+function makeCell(groupIndex, sheetRow, colInGroup, cellData, classExtra, subpanel, isLast) {
+  var locked = !!STATE.locks[String(groupIndex)];
+  var key = groupIndex + ':' + sheetRow + ':' + colInGroup;
+  var div = document.createElement('div');
+  div.className = 'cell ' + classExtra;
+  if (cellData.formula) div.classList.add('is-formula');
+  if (locked) div.classList.add('is-locked');
+  div.dataset.group = groupIndex;
+  div.dataset.sheetRow = sheetRow == null ? '' : sheetRow;
+  div.dataset.colInGroup = colInGroup;
+
+  var formulaSpan = document.createElement('div');
+  formulaSpan.className = 'formula-text';
+  if (cellData.formula) formulaSpan.textContent = cellData.formula;
+
+  var displaySpan = document.createElement('div');
+  displaySpan.className = 'display-text';
+  var displayed = STATE.unsaved.hasOwnProperty(key) ? STATE.unsaved[key] : (cellData.display || '');
+  if (STATE.unsaved.hasOwnProperty(key) && String(STATE.unsaved[key]).charAt(0) === '=') {
+    // Show the unsaved formula text directly; computed value will appear after server roundtrip
+    formulaSpan.textContent = STATE.unsaved[key];
+    displayed = cellData.display || '(computing…)';
+    div.classList.add('is-formula');
+  }
+  displaySpan.textContent = displayed;
+  if (colInGroup === 1 && displayed && /[\d.,$]/.test(displayed)) displaySpan.classList.add('numeric');
+
+  if (cellData.formula) div.appendChild(formulaSpan);
+  div.appendChild(displaySpan);
+
+  if (!locked) {
+    div.addEventListener('click', function (ev) {
+      if (div.classList.contains('editing')) return;
+      enterEdit(div, groupIndex, sheetRow, colInGroup, cellData, subpanel, isLast);
+    });
+  }
+  return div;
+}
+
+function enterEdit(cellDiv, groupIndex, sheetRow, colInGroup, cellData, subpanel, isLast) {
+  cellDiv.classList.add('editing');
+  cellDiv.innerHTML = '';
+  var input = document.createElement('input');
+  input.type = 'text';
+  // Prefill with formula text (if any), else the display value, else the unsaved edit.
+  var key = groupIndex + ':' + sheetRow + ':' + colInGroup;
+  var prefill;
+  if (STATE.unsaved.hasOwnProperty(key)) prefill = STATE.unsaved[key];
+  else if (cellData.formula) prefill = cellData.formula;
+  else prefill = (cellData.display != null ? String(cellData.display) : '');
+  input.value = prefill;
+  cellDiv.appendChild(input);
+
+  // Suggest list for input (col 0) and output (col 2)
+  var suggest = null;
+  if (colInGroup === 0 || colInGroup === 2) {
+    suggest = document.createElement('div');
+    suggest.className = 'suggest-list';
+    cellDiv.appendChild(suggest);
+    var options = buildSuggestions(groupIndex, colInGroup);
+    function repopulate(filter) {
+      suggest.innerHTML = '';
+      var f = String(filter || '').toLowerCase();
+      var shown = 0;
+      options.forEach(function (opt) {
+        if (f && opt.toLowerCase().indexOf(f) === -1) return;
+        var item = document.createElement('div');
+        item.className = 'suggest-item';
+        item.textContent = opt;
+        item.addEventListener('mousedown', function (ev) {
+          ev.preventDefault();
+          input.value = opt;
+          suggest.classList.remove('show');
+          commit();
+        });
+        suggest.appendChild(item);
+        shown++;
+      });
+      suggest.classList.toggle('show', shown > 0);
+    }
+    input.addEventListener('focus', function () { repopulate(input.value); });
+    input.addEventListener('input', function () { repopulate(input.value); });
+  }
+
+  function commit() {
+    var newText = input.value;
+    cellDiv.classList.remove('editing');
+    // Capture the pending edit
+    if (newText !== prefill || (cellData.formula && newText !== cellData.formula)) {
+      STATE.unsaved[key] = newText;
+      schedulePersist(groupIndex, sheetRow, colInGroup, newText);
+    }
+    // Re-render this cell visually using the new pending value
+    var freshCell = (function () {
+      var sp = STATE.subpanels[groupIndex];
+      if (!sp) return cellData;
+      for (var i = 0; i < sp.rows.length; i++) {
+        if (sp.rows[i].sheetRow === sheetRow) {
+          if (colInGroup === 0) return sp.rows[i].input;
+          if (colInGroup === 1) return sp.rows[i].value;
+          if (colInGroup === 2) return sp.rows[i].output;
+        }
+      }
+      return cellData;
+    })();
+    var replacement = makeCell(groupIndex, sheetRow, colInGroup, freshCell, cellDiv.classList.contains('value-cell') ? 'value-cell' : (cellDiv.classList.contains('input-cell') ? 'input-cell' : 'output-cell'), subpanel, isLast);
+    cellDiv.parentNode.replaceChild(replacement, cellDiv);
+    debouncedRender();
+  }
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+    else if (ev.key === 'Escape') { input.value = prefill; input.blur(); }
+  });
+
+  setTimeout(function () { input.focus(); input.select(); }, 0);
+}
+
+function buildSuggestions(groupIndex, colInGroup) {
+  // colInGroup 0 (input): union of prev subpanel outputs + this subpanel's input col values
+  // colInGroup 2 (output): union of next subpanel inputs + this subpanel's output col values
+  var values = {};
+  function addAll(arr) { arr.forEach(function (v) { if (v) values[v] = true; }); }
+  var thisSp = STATE.subpanels[groupIndex];
+  if (!thisSp) return [];
+  if (colInGroup === 0) {
+    addAll(thisSp.rows.map(function (r) { return cleanText(displayOrEdit(groupIndex, r.sheetRow, 0, r.input)); }));
+    if (groupIndex > 0) {
+      var prev = STATE.subpanels[groupIndex - 1];
+      addAll(prev.rows.map(function (r) { return cleanText(displayOrEdit(groupIndex - 1, r.sheetRow, 2, r.output)); }));
+    }
+  } else if (colInGroup === 2) {
+    addAll(thisSp.rows.map(function (r) { return cleanText(displayOrEdit(groupIndex, r.sheetRow, 2, r.output)); }));
+    if (groupIndex + 1 < STATE.subpanels.length) {
+      var next = STATE.subpanels[groupIndex + 1];
+      addAll(next.rows.map(function (r) { return cleanText(displayOrEdit(groupIndex + 1, r.sheetRow, 0, r.input)); }));
+    }
+  }
+  delete values[''];
+  return Object.keys(values).sort();
+}
+
+
+// =====================  Edit persistence (debounced auto-save)  =====================
+
+function schedulePersist(groupIndex, sheetRow, colInGroup, newText) {
+  var key = groupIndex + ':' + sheetRow + ':' + colInGroup;
+  if (STATE.pendingTimers[key]) clearTimeout(STATE.pendingTimers[key]);
+  STATE.pendingTimers[key] = setTimeout(function () {
+    if (sheetRow == null) {
+      // Cell was on a blank "new row" placeholder — first allocate a sheetRow, then write.
+      google.script.run
+        .withSuccessHandler(function (resp) {
+          var newSheetRow = resp.sheetRow;
+          // Move the pending edit to the new key
+          STATE.unsaved[groupIndex + ':' + newSheetRow + ':' + colInGroup] = newText;
+          delete STATE.unsaved[key];
+          // Insert the row in local state
+          STATE.subpanels[groupIndex].rows.push(resp.row);
+          writeCell(groupIndex, newSheetRow, colInGroup, newText);
+        })
+        .withFailureHandler(function (e) {
+          toast('Add row failed: ' + (e && e.message ? e.message : e));
+        })
+        .appendRowToSubpanel(groupIndex);
+    } else {
+      writeCell(groupIndex, sheetRow, colInGroup, newText);
+    }
+    delete STATE.pendingTimers[key];
+  }, EDIT_DEBOUNCE_MS);
+}
+
+function writeCell(groupIndex, sheetRow, colInGroup, newText) {
+  STATE.flightInProgress = true;
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.flightInProgress = false;
+      // Update local cell state with server-side computed display + formula
+      var sp = STATE.subpanels[groupIndex];
+      if (sp) {
+        var found = false;
+        for (var i = 0; i < sp.rows.length; i++) {
+          if (sp.rows[i].sheetRow === sheetRow) {
+            if (colInGroup === 0) sp.rows[i].input = resp.cell;
+            else if (colInGroup === 1) sp.rows[i].value = resp.cell;
+            else if (colInGroup === 2) sp.rows[i].output = resp.cell;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          // The row didn't exist in local state — refresh fully.
+          refreshFromServer();
+          return;
+        }
+      }
+      STATE.hash = resp.hash;
+      var key = groupIndex + ':' + sheetRow + ':' + colInGroup;
+      delete STATE.unsaved[key];
+      rerenderSubpanelRow(groupIndex, sheetRow);
+      debouncedRender();
+    })
+    .withFailureHandler(function (e) {
+      STATE.flightInProgress = false;
+      toast('Save failed: ' + (e && e.message ? e.message : e));
+    })
+    .writeCellEdit({ groupIndex: groupIndex, sheetRow: sheetRow, colInGroup: colInGroup, newText: newText });
+}
+
+function rerenderSubpanelRow(groupIndex, sheetRow) {
+  // Find the .row-grid for this sheetRow and re-render it.
+  var host = document.querySelector('.rows-host[data-group="' + groupIndex + '"]');
+  if (!host) return;
+  var grids = host.querySelectorAll('.row-grid');
+  for (var i = 0; i < grids.length; i++) {
+    if (grids[i].dataset.sheetRow == String(sheetRow)) {
+      var sp = STATE.subpanels[groupIndex];
+      if (!sp) return;
+      var row = sp.rows.filter(function (r) { return r.sheetRow === sheetRow; })[0];
+      if (!row) return;
+      var fresh = makeRowElement(groupIndex, row, sp, groupIndex === STATE.subpanels.length - 1);
+      grids[i].parentNode.replaceChild(fresh, grids[i]);
+      return;
+    }
+  }
+}
+
+// =====================  Add / Delete row  =====================
+
+function onAddRow(groupIndex) {
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.subpanels[groupIndex].rows.push(resp.row);
+      STATE.hash = resp.hash;
+      rebuildSubpanel(groupIndex);
+    })
+    .withFailureHandler(function (e) { toast('Add row failed: ' + (e && e.message ? e.message : e)); })
+    .appendRowToSubpanel(groupIndex);
+}
+
+function onDeleteRow(groupIndex, sheetRow) {
+  if (sheetRow == null) {
+    // Blank placeholder row — just rebuild
+    STATE.subpanels[groupIndex].rows = STATE.subpanels[groupIndex].rows.filter(function (r) { return r.sheetRow != null; });
+    rebuildSubpanel(groupIndex);
+    return;
+  }
+  if (!confirm('Clear the 3 cells of this row in the ' + STATE.subpanels[groupIndex].title + ' subpanel? Other subpanels on this sheet row are not affected.')) return;
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.hash = resp.hash;
+      STATE.subpanels[groupIndex].rows = STATE.subpanels[groupIndex].rows.filter(function (r) { return r.sheetRow !== sheetRow; });
+      rebuildSubpanel(groupIndex);
+      debouncedRender();
+    })
+    .withFailureHandler(function (e) { toast('Delete failed: ' + (e && e.message ? e.message : e)); })
+    .clearRowInSubpanel(groupIndex, sheetRow);
+}
+
+function rebuildSubpanel(groupIndex) {
+  var oldEl = document.querySelector('.subpanel[data-group="' + groupIndex + '"]');
+  if (!oldEl) return;
+  var wasOpen = oldEl.open;
+  var sp = STATE.subpanels[groupIndex];
+  var fresh = renderSubpanel(sp, groupIndex === STATE.subpanels.length - 1);
+  fresh.open = wasOpen;
+  oldEl.parentNode.replaceChild(fresh, oldEl);
+}
+
+// =====================  Drag-to-reorder  =====================
+
+var dragSrc = null;
+function onDragStart(ev) {
+  dragSrc = this;
+  this.classList.add('is-dragging');
+  if (ev.dataTransfer) {
+    ev.dataTransfer.effectAllowed = 'move';
+    try { ev.dataTransfer.setData('text/plain', this.dataset.sheetRow); } catch (e) {}
+  }
+}
+function onDragOver(ev) {
+  if (!dragSrc || dragSrc === this) return;
+  if (dragSrc.dataset.group !== this.dataset.group) return; // only reorder within same subpanel
+  ev.preventDefault();
+  this.classList.remove('drag-over-above', 'drag-over-below');
+  var rect = this.getBoundingClientRect();
+  var above = ev.clientY - rect.top < rect.height / 2;
+  this.classList.add(above ? 'drag-over-above' : 'drag-over-below');
+}
+function onDragLeave() {
+  this.classList.remove('drag-over-above', 'drag-over-below');
+}
+function onDrop(ev) {
+  ev.preventDefault();
+  if (!dragSrc || dragSrc === this) return;
+  if (dragSrc.dataset.group !== this.dataset.group) return;
+  this.classList.remove('drag-over-above', 'drag-over-below');
+  var fromRow = parseInt(dragSrc.dataset.sheetRow, 10);
+  var rect = this.getBoundingClientRect();
+  var dropAbove = ev.clientY - rect.top < rect.height / 2;
+  var thisRow = parseInt(this.dataset.sheetRow, 10);
+  var toRow = dropAbove ? thisRow : thisRow + 1;
+  // If moving down, drop position after target needs to account for source removal.
+  if (fromRow < toRow) toRow = toRow - 1;
+  if (fromRow === toRow) return;
+  doMoveRow(parseInt(this.dataset.group, 10), fromRow, toRow);
+}
+function onDragEnd() {
+  if (dragSrc) dragSrc.classList.remove('is-dragging');
+  dragSrc = null;
+  document.querySelectorAll('.row-grid').forEach(function (g) {
+    g.classList.remove('drag-over-above', 'drag-over-below');
+  });
+}
+
+function doMoveRow(groupIndex, fromRow, toRow) {
+  // One-time confirmation per user (server-side ack).
+  if (!STATE.reorderAckShown && !BOOT.reorderAckedFromBootstrap) {
+    var ok = confirm(
+      'Heads up: reordering uses Google Sheets\' built-in row move. This shifts the ENTIRE spreadsheet row ' +
+      '(including columns outside this subpanel like A–C and P+). Formulas referencing the moved row will ' +
+      'auto-update, just like dragging a row in the Sheets UI. Proceed?'
+    );
+    if (!ok) return;
+    STATE.reorderAckShown = true;
+    google.script.run.setReorderAck();
+  }
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.hash = resp.hash;
+      refreshFromServer(); // re-read; formulas and sheet rows have shifted
+    })
+    .withFailureHandler(function (e) { toast('Reorder failed: ' + (e && e.message ? e.message : e)); })
+    .moveSheetRow(fromRow, toRow);
+}
+
+// =====================  Lock toggle  =====================
+
+document.addEventListener('click', function (ev) {
+  var t = ev.target;
+  if (t && t.classList && t.classList.contains('lock-toggle')) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    var g = parseInt(t.dataset.group, 10);
+    var current = !!STATE.locks[String(g)];
+    STATE.locks[String(g)] = !current;
+    google.script.run
+      .withSuccessHandler(function () {})
+      .withFailureHandler(function (e) { toast('Lock save failed: ' + (e && e.message ? e.message : e)); })
+      .setSubpanelLock(g, !current);
+    rebuildSubpanel(g);
+  }
+});
+
+// =====================  Polling for external sheet edits  =====================
+
+var pollTimer = null;
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(function () {
+    if (STATE.flightInProgress) return; // Don't poll while a write is mid-flight
+    google.script.run
+      .withSuccessHandler(function (resp) {
+        if (!resp.changed) return;
+        var localKeys = Object.keys(STATE.unsaved);
+        if (localKeys.length === 0) {
+          // No conflict, just refresh
+          STATE.subpanels = resp.subpanels;
+          STATE.hash = resp.hash;
+          rebuildAllSubpanels();
+          debouncedRender();
+        } else {
+          showPollBanner(resp);
+        }
+      })
+      .pollChanges(STATE.hash);
+  }, POLL_INTERVAL_MS);
+}
+
+function showPollBanner(resp) {
+  var b = document.getElementById('poll-banner');
+  document.getElementById('poll-banner-text').textContent =
+    'Sheet changed externally. You have ' + Object.keys(STATE.unsaved).length + ' unsaved local edit(s).';
+  b._pendingSnapshot = resp;
+  b.classList.add('show');
+}
+document.getElementById('banner-keep-mine').addEventListener('click', function () {
+  // Refresh from server but keep local unsaved edits (they\'ll overwrite on next save).
+  var b = document.getElementById('poll-banner');
+  if (b._pendingSnapshot) {
+    STATE.subpanels = b._pendingSnapshot.subpanels;
+    STATE.hash = b._pendingSnapshot.hash;
+  }
+  b.classList.remove('show');
+  rebuildAllSubpanels();
+  debouncedRender();
+});
+document.getElementById('banner-discard').addEventListener('click', function () {
+  var b = document.getElementById('poll-banner');
+  if (b._pendingSnapshot) {
+    STATE.subpanels = b._pendingSnapshot.subpanels;
+    STATE.hash = b._pendingSnapshot.hash;
+  }
+  STATE.unsaved = {};
+  Object.keys(STATE.pendingTimers).forEach(function (k) { clearTimeout(STATE.pendingTimers[k]); });
+  STATE.pendingTimers = {};
+  b.classList.remove('show');
+  rebuildAllSubpanels();
+  debouncedRender();
+});
+
+function refreshFromServer() {
+  if (ACTIVE_PAGE === 'anchal' || ACTIVE_PAGE === 'anamika') {
+    invReload(ACTIVE_PAGE === 'anchal' ? 'Anchal' : 'Anamika');
+    return;
+  }
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      STATE.subpanels = resp.subpanels;
+      STATE.hash = resp.hash;
+      rebuildAllSubpanels();
+      debouncedRender();
+    })
+    .withFailureHandler(function (e) { toast('Refresh failed: ' + (e && e.message ? e.message : e)); })
+    .refreshState();
+}
+
+document.getElementById('refresh-btn').addEventListener('click', refreshFromServer);
+
+// =====================  Add new level  =====================
+
+document.getElementById('add-level-btn').addEventListener('click', function () {
+  var title = window.prompt('Title for the new level (subpanel header):', 'New Level');
+  if (title === null) return;            // cancelled
+  title = title.trim();
+  if (!title) { toast('A title is required.'); return; }
+  var btn = this;
+  btn.disabled = true;
+  toast('Adding level…');
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      btn.disabled = false;
+      if (!resp || !resp.ok) {
+        toast('Add level failed' + (resp && resp.message ? ': ' + resp.message : '.'));
+        return;
+      }
+      STATE.subpanels = resp.subpanels;
+      STATE.hash = resp.hash;
+      rebuildAllSubpanels();
+      debouncedRender();
+      toast('Added level: ' + title);
+    })
+    .withFailureHandler(function (e) {
+      btn.disabled = false;
+      toast('Add level failed: ' + (e && e.message ? e.message : e));
+    })
+    .addNewLevel(title);
+});
+
+function rebuildAllSubpanels() {
+  var host = document.getElementById('subpanels-container');
+  host.innerHTML = '';
+  for (var i = 0; i < STATE.subpanels.length; i++) {
+    host.appendChild(renderSubpanel(STATE.subpanels[i], i === STATE.subpanels.length - 1));
+  }
+}
+
+
+// =====================  Sankey export (PNG / PDF)  =====================
+
+function buildSvgString() {
+  // Inline computed CSS vars + base rules so the Sankey SVG is self-contained.
+  var svgEl = document.getElementById('sankey-svg');
+  var cs = getComputedStyle(document.documentElement);
+  var vars = [
+    ["--node-width", cs.getPropertyValue("--node-width").trim() || "250px"],
+    ["--node-font-size", cs.getPropertyValue("--node-font-size").trim() || "24px"],
+    ["--node-text-background-opacity", cs.getPropertyValue("--node-text-background-opacity").trim() || "0"],
+    ["--flow-opacity", cs.getPropertyValue("--flow-opacity").trim() || "0.5"]
+  ];
+  var css = ":root{" + vars.map(function (v) { return v[0] + ":" + v[1] + ";"; }).join("") + "}" +
+            ".nodes text{font-family:\"Open Sans\",Arial,sans-serif;font-weight:600;font-size:var(--node-font-size);}" +
+            ".nodes rect{opacity:0.85;}" +
+            ".nodes .label-bg{fill:white;opacity:var(--node-text-background-opacity);}" +
+            ".links path{fill:none;opacity:var(--flow-opacity);}";
+  return serializeSvg(svgEl, css);
+}
+
+
+function exportPng() {
+  var s = readSettings();
+  exportSvgStringToPng(buildSvgString(), s.canvasWidth, s.canvasHeight, 'sankey-' + Date.now() + '.png');
+}
+
+function exportPdfViaPrintTab() {
+  exportSvgStringToPdf(buildSvgString());
+}
+
+document.getElementById('export-png').addEventListener('click', exportPng);
+document.getElementById('export-pdf').addEventListener('click', exportPdfViaPrintTab);
+
+
+// =====================  Debounced Sankey re-render  =====================
+
+var renderTimer = null;
+function debouncedRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(function () { renderSankey(); }, 120);
+}
+

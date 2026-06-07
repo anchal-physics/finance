@@ -55,9 +55,30 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 |------|---------|------------------|
 | `SankeyRenderer.gs` | Menu-driven Sankey renderer + sankeydiagram.net-style modal dialog. Big file (~42 KB) — most of the bulk is inline HTML+JS for the dialog. | yes |
 | ~~`Sankey.gs`~~ | **Deleted** (in git history at/before this point). Legacy copy/paste-to-sankeydiagram.net converter, superseded by `SankeyRenderer.gs`. Removed from `.clasp.json` `filePushOrder` too. | gone |
-| `Webapp.gs` | Server endpoints for the web app: `doGet`, bootstrap payload, cell writes, row add/delete/move, settings + locks, polling, print-SVG handoff. | yes |
-| `WebappPage.html` | Main webapp UI: 3 collapsible panels (Sankey diagram, settings, editor). Formula-aware cell editor. Drag-reorder. 30s polling. PNG/PDF export. | yes |
+| `Webapp.gs` | **Thin top-level combiner only**: `doGet` (routing), `include()`, and cross-feature server code shared by all tabs — print-to-PDF handoff (`storePrintSvg`/`servePrintPage_`), generic named settings (`getNamedSettings`/`saveNamedSettings`), reorder ack, and shared helpers (`setCellSmart_`, `moveRowOnSheet_`, `safeGetUserEmail_`). No feature logic. Add a feature ⇒ add a new `<Feature>.gs`; Webapp only routes. ~150 lines. | yes |
+| `PayrollSankey.gs` | Server for the PayrollSankey landing tab: bootstrap payload, snapshot/polling, cell writes, row add/delete/move (`moveSheetRow`), settings + subpanel locks, `getEffectiveRange_`, `addNewLevel`. | yes |
+| `Investment.gs` | Server for the Anchal/Anamika tabs: `computeInvestmentModel_`, `getInvestmentData`, editor endpoints (`getInvestmentEditor`, `writeInvestmentCell`, append/clear/move row, `pollInvestment`), + investment-only helpers. | yes |
+| `WebappPage.html` | **Shell only** — `<head>`, topbar, tab nav, page containers, and the one `<script>` IIFE that stitches the client modules via `<?!= include('…') ?>`. The actual code lives in the partials below. | yes |
+| `Styles.html` | All CSS (the `<style>` block), included into `<head>`. | yes |
+| `PayrollSankeyPage.html` | Static markup for the PayrollSankey landing page's 3 panels. | yes |
+| `CoreJs.html` | Shared client JS: bootstrap/state/constants, `PALETTES`, `escapeHtml`, `toast`, `serializeSvg`, `exportSvgStringToPng/Pdf`. | yes |
+| `PayrollSankeyJs.html` | PayrollSankey client JS: parser, renderer, subpanel editor, persistence, drag, polling, Sankey export. | yes |
+| `InvestmentJs.html` | Investment client JS: pie/bar SVG builders, legend, settings, editor, tab nav, per-chart export, polling. | yes |
+| `InitJs.html` | Initial-wiring block; **must be included last** (applies settings, first render, starts polling). | yes |
 | `PrintPage.html` | Print-to-PDF view — receives an SVG token, embeds the SVG full-page with `@media print` CSS, auto-opens the print dialog. | yes |
+
+> **Client is split across `.html` partials stitched by `include()`.** Apps
+> Script serves ONE document: `doGet` evaluates `WebappPage.html`, whose
+> `<?!= include('X') ?>` scriptlets inline each partial's raw content at serve
+> time. The four JS partials are concatenated **inside a single `<script>`
+> IIFE**, so they share one closure (`STATE`, `INV`, helpers) — function
+> declarations hoist across all of them, so include order only matters for
+> top-level statements (hence `InitJs` last). This is purely source
+> organization: there is no per-file lazy-loading or runtime size win.
+> `include()` uses `createHtmlOutputFromFile` (NOT template eval), so partials
+> must contain no `<?= ?>` scriptlets — all `<?!= ?>` stay in `WebappPage.html`.
+> To verify after edits: resolve the includes, extract `<script>` blocks, and
+> `node --check` the assembled JS (see the split commit for the exact snippet).
 | `Tax.gs` | `FedTax`, `CATax`, year-specific aliases. Brackets for 2023/2024/2025 hardcoded. | yes |
 | `Stock.gs` | `GET_ALL_STOCK_SUMMARIES` FIFO lot-accounting function. | yes |
 | `appsscript.json` | Apps Script manifest: web-app config (`executeAs: USER_ACCESSING`, `access: ANYONE`), enables Sheets advanced service, declares OAuth scopes. | yes |
@@ -224,10 +245,10 @@ chart model; `getInvestmentEditor(investor)` / `writeInvestmentCell` /
 `appendInvestmentRow` / `clearInvestmentRow` / `moveInvestmentRow` /
 `pollInvestment` for the editor; `getNamedSettings`/`saveNamedSettings`
 for per-user, per-chart settings (key `inv:<investor>`). Editor columns:
-Anchal `A–H`, Anamika `A–E + I–K`. Charts and editor are all in
-`WebappPage.html` under the `// Investment pages` section (hand-rolled SVG,
-no chart lib). The reusable export pipeline is `serializeSvg` +
-`exportSvgStringToPng` / `exportSvgStringToPdf`.
+Anchal `A–H`, Anamika `A–E + I–K`. The charts and editor client code live in
+`InvestmentJs.html` (hand-rolled SVG, no chart lib); the reusable export
+pipeline (`serializeSvg` + `exportSvgStringToPng` / `exportSvgStringToPdf`)
+lives in `CoreJs.html`.
 
 ---
 

@@ -1,0 +1,115 @@
+// =====================  Constants & state  =====================
+
+var BOOT = window.BOOTSTRAP || {};
+var STATE = {
+  subpanels: BOOT.subpanels || [],
+  hash: BOOT.hash || '',
+  locks: BOOT.locks || {},
+  settings: BOOT.settings || null,
+  unsaved: {}, // key "g:row:col" -> newText (pending write to sheet)
+  pendingTimers: {}, // key "g:row:col" -> timeout id
+  reorderAckShown: false,
+  flightInProgress: false
+};
+var POLL_INTERVAL_MS = 30000;
+var EDIT_DEBOUNCE_MS = 800;
+
+document.getElementById('whoami').textContent = BOOT.userEmail || '';
+
+// =====================  Color palettes (mirror SankeyRenderer.gs)  =====================
+
+var PALETTES = {
+  "default": ["#17becf","#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22"],
+  "accent":   d3.schemeAccent,
+  "paired":   d3.schemePaired,
+  "set2":     d3.schemeSet2,
+  "set3":     d3.schemeSet3,
+  "cat10":    d3.schemeCategory10,
+  "pastel1":  d3.schemePastel1,
+  "nested": [
+    "#17becf","#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b",
+    "#e377c2","#7f7f7f","#bcbd22","#aec7e8","#ffbb78","#98df8a","#ff9896",
+    "#c5b0d5","#c49c94","#f7b6d2","#c7c7c7","#dbdb8d","#9edae5","#393b79",
+    "#637939","#8c6d31","#843c39","#7b4173","#3182bd","#e6550d","#31a354",
+    "#756bb1","#636363","#5254a3","#bd9e39","#ad494a"
+  ]
+};
+
+
+// =====================  Shared helpers (escape / SVG export / toast)  =====================
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+
+/**
+ * Serialize an SVG element to a standalone string, injecting a <style data-export>
+ * with the given CSS so the exported SVG is self-contained.
+ */
+function serializeSvg(svgEl, css) {
+  var existingStyle = svgEl.querySelector('style[data-export]');
+  if (existingStyle) existingStyle.remove();
+  if (css) {
+    var styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+    styleEl.setAttribute('data-export', '1');
+    styleEl.textContent = css;
+    svgEl.insertBefore(styleEl, svgEl.firstChild);
+  }
+  if (!svgEl.getAttribute('xmlns')) svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  var s = new XMLSerializer().serializeToString(svgEl);
+  var leftover = svgEl.querySelector('style[data-export]');
+  if (leftover) leftover.remove();
+  return s;
+}
+
+
+/** Generic: rasterize an SVG string to a downloaded PNG at width×height. */
+function exportSvgStringToPng(svgStr, width, height, filename) {
+  var img = new Image();
+  var blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  img.onload = function () {
+    var canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob(function (b) {
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = filename;
+      document.body.appendChild(a); a.click();
+      setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 100);
+    }, 'image/png');
+  };
+  img.onerror = function () { URL.revokeObjectURL(url); toast('PNG export failed'); };
+  img.src = url;
+}
+
+
+/** Generic: hand an SVG string to the server print page and open it in a new tab. */
+function exportSvgStringToPdf(svgStr) {
+  toast('Preparing print tab…');
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      var base = window.location.href.split('?')[0];
+      window.open(base + '?print=1&token=' + encodeURIComponent(resp.token), '_blank');
+    })
+    .withFailureHandler(function (e) { toast('Print failed: ' + (e && e.message ? e.message : e)); })
+    .storePrintSvg(svgStr);
+}
+
+
+var toastTimer = null;
+function toast(msg) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3200);
+}
+

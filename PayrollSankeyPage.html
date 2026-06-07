@@ -1,0 +1,68 @@
+
+<!-- Panel 1: Sankey diagram (expanded) -->
+<details class="panel" id="panel-diagram" open>
+  <summary>Sankey diagram</summary>
+  <div class="panel-body">
+    <div class="canvas-wrap">
+      <svg id="sankey-svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <div id="render-status" style="font-size:11px; color:#777; margin-top:6px;"></div>
+  </div>
+</details>
+
+<!-- Panel 2: Settings (collapsed) -->
+<details class="panel" id="panel-settings">
+  <summary>Sankey settings</summary>
+  <div class="panel-body">
+    <div class="settings-grid">
+      <div class="setting-row"><label>Decimal precision</label><input type="number" id="precision" value="1" min="0" max="15"></div>
+      <div class="setting-row"><label>Hide zero decimals</label><input type="checkbox" id="hidezeros" checked></div>
+      <div class="setting-row"><label>Thousands separators</label><input type="checkbox" id="separators" checked></div>
+      <div class="setting-row"><label>Value prefix</label><input type="text" id="prefix" value="$"></div>
+      <div class="setting-row"><label>Value suffix</label><input type="text" id="suffix"></div>
+      <div class="setting-row"><label>Hide numbers</label><input type="checkbox" id="hidenumbers" checked></div>
+      <div class="setting-row"><label>Color scheme</label>
+        <select id="colorscheme">
+          <option value="default">default</option><option value="accent">accent</option>
+          <option value="paired">paired</option><option value="set2">set2</option>
+          <option value="set3">set3</option><option value="cat10">cat10</option>
+          <option value="pastel1">pastel1</option><option value="nested">nested</option>
+        </select></div>
+      <div class="setting-row"><label>Flow opacity (%)</label><input type="number" id="flow-opacity" value="50" min="0" max="100"></div>
+      <div class="setting-row"><label>Color by first word</label><input type="checkbox" id="firstword"></div>
+      <div class="setting-row"><label>Color nodes</label><input type="checkbox" id="colornodes" checked></div>
+      <div class="setting-row"><label>Node width (px)</label><input type="number" id="nodewidth" value="250" min="0"></div>
+      <div class="setting-row"><label>Node padding (px)</label><input type="number" id="nodepadding" value="20" min="0"></div>
+      <div class="setting-row"><label>Label placement</label>
+        <select id="labelplacement">
+          <option value="inside" selected>inside</option>
+          <option value="outside">outside</option>
+          <option value="above">above</option>
+        </select></div>
+      <div class="setting-row"><label>Label BG opacity (%)</label><input type="number" id="labelbg" value="0" min="0" max="100"></div>
+      <div class="setting-row"><label>Sort by line number</label><input type="checkbox" id="sortbyline" checked></div>
+      <div class="setting-row"><label>Canvas width</label><input type="number" id="canvaswidth" value="1920" min="100"></div>
+      <div class="setting-row"><label>Canvas height</label><input type="number" id="canvasheight" value="1080" min="100"></div>
+      <div class="setting-row"><label>Font size (px)</label><input type="number" id="fontsize" value="24" min="6"></div>
+      <div class="setting-row"><label>Node alignment</label>
+        <select id="nodealign">
+          <option value="justify">justify</option><option value="left">left</option>
+          <option value="right">right</option><option value="center">center</option>
+        </select></div>
+    </div>
+    <div style="margin-top:10px;"><button class="btn ghost sm" id="reset-settings">Reset to defaults</button></div>
+  </div>
+</details>
+
+<!-- Panel 3: Editor (collapsed) -->
+<details class="panel" id="panel-editor">
+  <summary>PayrollSankey editor</summary>
+  <div class="panel-body">
+    <div id="subpanels-container"></div>
+    <div style="margin-top:12px; padding-top:10px; border-top: 1px dashed #ddd;">
+      <button class="btn ghost sm" id="add-level-btn" title="Append a new Input | title | Output column triplet to the right">+ Add new level</button>
+      <span style="font-size:11px; color:#999; margin-left:8px;">Adds a new subpanel (column triplet) to the right of the last level.</span>
+    </div>
+  </div>
+</details>
+

@@ -1,0 +1,46 @@
+// =====================  Initial wiring  =====================
+
+// Apply saved settings
+if (STATE.settings) applySettingsToUi(STATE.settings);
+
+// Render subpanels
+rebuildAllSubpanels();
+
+// Initial Sankey
+renderSankey();
+
+// Settings change → re-render + persist
+SETTING_IDS.forEach(function (id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var evt = (el.type === 'checkbox' || el.tagName === 'SELECT') ? 'change' : 'input';
+  el.addEventListener(evt, function () {
+    debouncedRender();
+    schedulePersistSettings();
+  });
+});
+
+var settingsTimer = null;
+function schedulePersistSettings() {
+  if (settingsTimer) clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(persistSettings, 600);
+}
+
+document.getElementById('reset-settings').addEventListener('click', function () {
+  function $(id) { return document.getElementById(id); }
+  $("precision").value = 1; $("hidezeros").checked = true; $("separators").checked = true;
+  $("prefix").value = "$"; $("suffix").value = ""; $("hidenumbers").checked = true;
+  $("colorscheme").value = "default"; $("flow-opacity").value = 50;
+  $("firstword").checked = false; $("colornodes").checked = true;
+  $("nodewidth").value = 250; $("nodepadding").value = 20;
+  $("labelplacement").value = "inside"; $("labelbg").value = 0;
+  $("sortbyline").checked = true; $("canvaswidth").value = 1920;
+  $("canvasheight").value = 1080; $("fontsize").value = 24; $("nodealign").value = "justify";
+  debouncedRender();
+  schedulePersistSettings();
+});
+
+// Begin polling
+startPolling();
+invStartPolling();
+
