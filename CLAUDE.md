@@ -31,6 +31,16 @@ personal/family finance workbook in Google Sheets). It does three things:
    spilled array of `[ticker, totalShares, ltShares, stShares, ltAvgCost,
    stAvgCost]` for each currently-held ticker.
 
+4. **Investment dashboard pages** (in the same web app) — two extra tabs,
+   **Anchal** and **Anamika**, alongside the PayrollSankey landing tab.
+   Each renders, from the `Investment` sheet: a hand-rolled SVG **donut/pie**
+   (categories as color groups, tickers as shaded sub-slices split by dotted
+   radial lines, with an HTML legend of %/weekly-$), a hand-rolled SVG **bar
+   chart** of strategy-weighted 6mo/1yr/3yr/5yr returns, a per-chart
+   **settings** panel, and a full-parity **editor** over that investor's
+   columns. Both charts embed a subtitle: *"Investing $X/week at an effective
+   expense ratio of Y%."* Nav is tabs (desktop) / hamburger drawer (mobile).
+
 **User**: Anchal (agupta@bluelaserfusion.com). Lives in CA. The workbook
 also tracks his wife's (Anamika's) payroll/expenses; both have separate
 columns in the Tax and PayrollSankey sheets.
@@ -180,6 +190,44 @@ Robinhood transaction history.
 
 Sign convention: positive Quantity = adds shares, negative = removes.
 Cost basis preference: `|Amount|` if non-zero, else `Quantity * Closing Price`.
+
+### Sheet: Investment
+
+Drives the **Anchal** and **Anamika** webapp tabs. Headers in row 2,
+weighted-cumulative summary in row 3, ticker data row 4 onward:
+
+| Col | Meaning |
+|-----|---------|
+| A | Broad Category (only on each category's first row; spans the block below) |
+| B / C | Anchal / Anamika per-category Target % (sum formulas) |
+| D / E | Symbol / ETF name (`GOOGLEFINANCE`) |
+| F / G / H | **Anchal**: Expense Ratio / Target % / Weekly $ (base `H3=900`) |
+| I / J / K | **Anamika**: Expense Ratio / Target % / Weekly $ (base `K3=375`) |
+| L / M / N / O | 6mo / 1yr / 3yr / 5yr return ratios (period totals, not annualized) |
+
+**Conventions that bite if you forget them**: `G`/`J` (Target %) and the
+return columns `L:O` are **fractions** (sum of `G`≈1.0); `F`/`I` (Expense
+Ratio) are **already in percent** (e.g. `0.03` = 0.03%). So in the webapp,
+weights and returns are formatted `×100 + "%"`, but the effective expense
+ratio is formatted with just `+ "%"`. Per-ticker allocation weight = Target %
+(`G`/`J`) — this matches the sheet's own `L3:O3` cumulative formulas.
+
+**Two sheet quirks the code works around** by computing all aggregates
+itself from raw cells (never reading row 3): `I3` (Anamika effective ER) is
+weighted by `G` instead of `J`, and there is no Anamika cumulative-return
+row. The aggregation in `Webapp.gs` (`computeInvestmentModel_`) was verified
+in node against the sheet's `F3`/`G3`/`L3:O3` for Anchal (exact match) and
+computes Anamika correctly by `J`.
+
+**Server endpoints** (`Webapp.gs`): `getInvestmentData(investor)` →
+chart model; `getInvestmentEditor(investor)` / `writeInvestmentCell` /
+`appendInvestmentRow` / `clearInvestmentRow` / `moveInvestmentRow` /
+`pollInvestment` for the editor; `getNamedSettings`/`saveNamedSettings`
+for per-user, per-chart settings (key `inv:<investor>`). Editor columns:
+Anchal `A–H`, Anamika `A–E + I–K`. Charts and editor are all in
+`WebappPage.html` under the `// Investment pages` section (hand-rolled SVG,
+no chart lib). The reusable export pipeline is `serializeSvg` +
+`exportSvgStringToPng` / `exportSvgStringToPdf`.
 
 ---
 

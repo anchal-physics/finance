@@ -95,6 +95,42 @@
   .lock-toggle:hover { background: #e8eaed; border-radius: 4px; }
   .lock-toggle.locked { color: #1a73e8; }
 
+  /* ---- Tab navigation ---- */
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; background: #e8eaed; padding: 4px; border-radius: 8px; }
+  .tab { flex: 0 0 auto; padding: 7px 18px; border: none; background: transparent; border-radius: 6px; font-size: 13px; font-weight: 600; color: #555; cursor: pointer; }
+  .tab:hover { background: #dfe2e6; }
+  .tab.active { background: #fff; color: #1a73e8; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+  .hamburger { display: none; background: transparent; border: none; font-size: 22px; cursor: pointer; color: #333; padding: 2px 8px; line-height: 1; }
+
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* ---- Investment charts ---- */
+  .chart-toolbar { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .chart-wrap { padding: 6px; background: #fff; border: 1px solid #eaecef; border-radius: 6px; }
+  .chart-svg { width: 100%; height: auto; display: block; background: #fff; }
+  .chart-layout { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; align-items: start; }
+  .pie-legend { font-size: 12px; max-height: 520px; overflow-y: auto; }
+  .legend-cat { margin-bottom: 8px; }
+  .legend-cat-head { display: flex; align-items: center; gap: 6px; font-weight: 600; padding: 3px 0; border-bottom: 1px solid #eee; }
+  .legend-cat-head .pct { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .legend-cat-head .amt { color: #777; font-weight: 400; font-variant-numeric: tabular-nums; min-width: 70px; text-align: right; }
+  .swatch { width: 12px; height: 12px; border-radius: 2px; flex: 0 0 auto; }
+  .legend-ticker { display: flex; align-items: center; gap: 6px; padding: 2px 0 2px 18px; color: #444; }
+  .legend-ticker .sym { font-weight: 600; }
+  .legend-ticker .nm { color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .legend-ticker .pct { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .legend-ticker .amt { color: #777; font-variant-numeric: tabular-nums; min-width: 70px; text-align: right; }
+  .chart-empty { padding: 30px 14px; color: #999; font-size: 13px; text-align: center; }
+
+  /* ---- Investment editor grid (column count varies) ---- */
+  .inv-grid-head, .inv-row-grid { display: grid; gap: 6px; align-items: center; padding: 4px 0; }
+  .inv-row-grid > .col-head { font-size: 11px; color: #777; text-transform: uppercase; letter-spacing: 0.5px; }
+  .inv-grid-head > .col-head { font-size: 11px; color: #777; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 0; }
+  .inv-row-grid.is-dragging { opacity: 0.5; }
+  .inv-row-grid.drag-over-above { border-top: 2px solid #1a73e8; }
+  .inv-row-grid.drag-over-below { border-bottom: 2px solid #1a73e8; }
+
   /* ---- Status banner ---- */
   #poll-banner { position: fixed; top: 12px; right: 12px; max-width: 380px; background: #fff7e0; border: 1px solid #f1c232; border-radius: 6px; padding: 10px 14px; font-size: 13px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); z-index: 999; display: none; }
   #poll-banner.show { display: block; }
@@ -114,22 +150,49 @@
     .row-grid > .col-head { display: none; }
     .settings-grid { grid-template-columns: 1fr; }
     .cell .formula-text { font-size: 11px; }
+    .hamburger { display: inline-block; }
+    /* Tabs collapse into a drawer toggled by the hamburger */
+    .tabs { position: absolute; top: 52px; left: 8px; right: 8px; z-index: 500;
+            flex-direction: column; align-items: stretch; display: none;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15); }
+    .tabs.open { display: flex; }
+    .tab { text-align: left; padding: 12px 16px; }
+    .chart-layout { grid-template-columns: 1fr; }
+    .pie-legend { max-height: none; }
+    .inv-row-grid { grid-template-columns: 24px 1fr 32px !important; row-gap: 4px; }
+    .inv-row-grid > .cell { grid-column: 1 / -1; }
+    .inv-grid-head { display: none !important; }
+    .inv-row-grid > .col-head { display: none; }
   }
 </style>
 </head>
 <body>
 
 <div class="topbar">
-  <h1>PayrollSankey</h1>
+  <div style="display:flex; align-items:center; gap:6px;">
+    <button class="hamburger" id="hamburger" aria-label="Menu" aria-expanded="false">☰</button>
+    <h1 id="page-title">PayrollSankey</h1>
+  </div>
   <div style="display:flex; gap:8px; align-items:center;">
     <span class="who" id="whoami"></span>
     <div class="actions">
-      <button class="btn ghost sm" id="refresh-btn" title="Re-read all data from the sheet">Refresh</button>
-      <button class="btn ghost sm" id="export-png">PNG</button>
-      <button class="btn ghost sm" id="export-pdf">PDF (print)</button>
+      <button class="btn ghost sm" id="refresh-btn" title="Re-read data from the sheet">Refresh</button>
+      <span id="sankey-export" style="display:inline-flex; gap:6px;">
+        <button class="btn ghost sm" id="export-png">PNG</button>
+        <button class="btn ghost sm" id="export-pdf">PDF (print)</button>
+      </span>
     </div>
   </div>
 </div>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-page="sankey">PayrollSankey</button>
+  <button class="tab" data-page="anchal">Anchal</button>
+  <button class="tab" data-page="anamika">Anamika</button>
+</nav>
+
+<!-- ===================== Page: PayrollSankey (landing) ===================== -->
+<div class="page active" id="page-sankey">
 
 <!-- Panel 1: Sankey diagram (expanded) -->
 <details class="panel" id="panel-diagram" open>
@@ -197,6 +260,14 @@
     </div>
   </div>
 </details>
+
+</div><!-- /page-sankey -->
+
+<!-- ===================== Page: Anchal investment ===================== -->
+<div class="page" id="page-anchal"></div>
+
+<!-- ===================== Page: Anamika investment ===================== -->
+<div class="page" id="page-anamika"></div>
 
 <!-- Polling conflict banner -->
 <div id="poll-banner" role="alert">
@@ -1091,6 +1162,10 @@ document.getElementById('banner-discard').addEventListener('click', function () 
 });
 
 function refreshFromServer() {
+  if (ACTIVE_PAGE === 'anchal' || ACTIVE_PAGE === 'anamika') {
+    invReload(ACTIVE_PAGE === 'anchal' ? 'Anchal' : 'Anamika');
+    return;
+  }
   google.script.run
     .withSuccessHandler(function (resp) {
       STATE.subpanels = resp.subpanels;
@@ -1144,8 +1219,28 @@ function rebuildAllSubpanels() {
 
 // =====================  Export: PNG + PDF (print-to-PDF)  =====================
 
+/**
+ * Serialize an SVG element to a standalone string, injecting a <style data-export>
+ * with the given CSS so the exported SVG is self-contained.
+ */
+function serializeSvg(svgEl, css) {
+  var existingStyle = svgEl.querySelector('style[data-export]');
+  if (existingStyle) existingStyle.remove();
+  if (css) {
+    var styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+    styleEl.setAttribute('data-export', '1');
+    styleEl.textContent = css;
+    svgEl.insertBefore(styleEl, svgEl.firstChild);
+  }
+  if (!svgEl.getAttribute('xmlns')) svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  var s = new XMLSerializer().serializeToString(svgEl);
+  var leftover = svgEl.querySelector('style[data-export]');
+  if (leftover) leftover.remove();
+  return s;
+}
+
 function buildSvgString() {
-  // Inline computed CSS vars + base rules so the SVG is self-contained.
+  // Inline computed CSS vars + base rules so the Sankey SVG is self-contained.
   var svgEl = document.getElementById('sankey-svg');
   var cs = getComputedStyle(document.documentElement);
   var vars = [
@@ -1159,29 +1254,17 @@ function buildSvgString() {
             ".nodes rect{opacity:0.85;}" +
             ".nodes .label-bg{fill:white;opacity:var(--node-text-background-opacity);}" +
             ".links path{fill:none;opacity:var(--flow-opacity);}";
-  var existingStyle = svgEl.querySelector('style[data-export]');
-  if (existingStyle) existingStyle.remove();
-  var styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-  styleEl.setAttribute('data-export', '1');
-  styleEl.textContent = css;
-  svgEl.insertBefore(styleEl, svgEl.firstChild);
-  if (!svgEl.getAttribute('xmlns')) svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  var s = new XMLSerializer().serializeToString(svgEl);
-  var leftover = svgEl.querySelector('style[data-export]');
-  if (leftover) leftover.remove();
-  return s;
+  return serializeSvg(svgEl, css);
 }
 
-function exportPng() {
-  var s = readSettings();
-  var svgStr = buildSvgString();
+/** Generic: rasterize an SVG string to a downloaded PNG at width×height. */
+function exportSvgStringToPng(svgStr, width, height, filename) {
   var img = new Image();
   var blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
   var url = URL.createObjectURL(blob);
   img.onload = function () {
     var canvas = document.createElement('canvas');
-    canvas.width = s.canvasWidth;
-    canvas.height = s.canvasHeight;
+    canvas.width = width; canvas.height = height;
     var ctx = canvas.getContext('2d');
     ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
@@ -1189,7 +1272,7 @@ function exportPng() {
     canvas.toBlob(function (b) {
       var a = document.createElement('a');
       a.href = URL.createObjectURL(b);
-      a.download = 'sankey-' + Date.now() + '.png';
+      a.download = filename;
       document.body.appendChild(a); a.click();
       setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 100);
     }, 'image/png');
@@ -1198,20 +1281,25 @@ function exportPng() {
   img.src = url;
 }
 
-function exportPdfViaPrintTab() {
-  var svgStr = buildSvgString();
+/** Generic: hand an SVG string to the server print page and open it in a new tab. */
+function exportSvgStringToPdf(svgStr) {
   toast('Preparing print tab…');
   google.script.run
     .withSuccessHandler(function (resp) {
-      // Open the print URL (Apps Script web-app URL + ?print=1&token=…)
-      var url = window.location.pathname + '?print=1&token=' + encodeURIComponent(resp.token);
-      // Apps Script /exec or /dev URLs accept query string parameters directly.
-      // window.location includes both; we only need to keep up to the last segment + new params.
       var base = window.location.href.split('?')[0];
       window.open(base + '?print=1&token=' + encodeURIComponent(resp.token), '_blank');
     })
     .withFailureHandler(function (e) { toast('Print failed: ' + (e && e.message ? e.message : e)); })
     .storePrintSvg(svgStr);
+}
+
+function exportPng() {
+  var s = readSettings();
+  exportSvgStringToPng(buildSvgString(), s.canvasWidth, s.canvasHeight, 'sankey-' + Date.now() + '.png');
+}
+
+function exportPdfViaPrintTab() {
+  exportSvgStringToPdf(buildSvgString());
 }
 
 document.getElementById('export-png').addEventListener('click', exportPng);
@@ -1234,6 +1322,539 @@ var renderTimer = null;
 function debouncedRender() {
   if (renderTimer) clearTimeout(renderTimer);
   renderTimer = setTimeout(function () { renderSankey(); }, 120);
+}
+
+// =====================  Investment pages (Anchal / Anamika)  =====================
+
+var INV_FONT = '"Open Sans", Arial, sans-serif';
+var INV_INVESTORS = ['Anchal', 'Anamika'];
+
+var INV_DEFAULTS = {
+  shared: { palette: 'cat10', pctPrecision: 1 },
+  pie:    { innerRadiusPct: 50, sliceLabels: true, legend: true, width: 1500, height: 1140 },
+  bar:    { color: '#1a73e8', showValues: true, width: 1400, height: 868 }
+};
+
+var INV = {
+  Anchal:  { model: null, editor: null, settings: null, loaded: false, built: false, hash: '' },
+  Anamika: { model: null, editor: null, settings: null, loaded: false, built: false, hash: '' }
+};
+var ACTIVE_PAGE = 'sankey';
+var INV_REORDER_WARNED = false;
+var invSettingsTimers = {};
+
+// ---------- small formatters / color helpers ----------
+function invPalette(name) { return PALETTES[name] || PALETTES['cat10']; }
+function invHexToRgb(h) {
+  h = String(h).replace('#', '');
+  if (h.length === 3) h = h.split('').map(function (c) { return c + c; }).join('');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+// amt in [-1,1]: negative = darker, positive = lighter
+function invShade(hex, amt) {
+  if (!/^#?[0-9a-fA-F]{3,6}$/.test(String(hex))) return hex;
+  var rgb = invHexToRgb(hex), t = amt < 0 ? 0 : 255, p = Math.abs(amt);
+  var mix = function (c) { return Math.round((t - c) * p + c); };
+  return 'rgb(' + mix(rgb[0]) + ',' + mix(rgb[1]) + ',' + mix(rgb[2]) + ')';
+}
+function invFmtPct(frac, prec) { return (Number(frac) * 100).toFixed(prec) + '%'; }
+function invFmtER(erPct, prec) { return Number(erPct).toFixed(prec) + '%'; } // already in % units
+function invFmtMoney(v) {
+  var n = Math.round(Number(v) || 0);
+  return '$' + String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function invSubtitle(model) {
+  var weekly = (model.totalWeekly != null ? model.totalWeekly : model.weeklyBase) || 0;
+  return 'Investing ' + invFmtMoney(weekly) + '/week at an effective expense ratio of ' +
+         invFmtER(model.effectiveExpenseRatio, 2) + '.';
+}
+
+// ---------- SVG geometry ----------
+function invPolar(cx, cy, r, ang) { return [cx + r * Math.sin(ang), cy - r * Math.cos(ang)]; }
+function invDonutPath(cx, cy, rIn, rOut, a0, a1) {
+  var large = (a1 - a0) > Math.PI ? 1 : 0;
+  var p0o = invPolar(cx, cy, rOut, a0), p1o = invPolar(cx, cy, rOut, a1);
+  var p1i = invPolar(cx, cy, rIn, a1), p0i = invPolar(cx, cy, rIn, a0);
+  var f = function (p) { return p[0].toFixed(2) + ',' + p[1].toFixed(2); };
+  return 'M' + f(p0o) + 'A' + rOut + ',' + rOut + ' 0 ' + large + ' 1 ' + f(p1o) +
+         'L' + f(p1i) + 'A' + rIn + ',' + rIn + ' 0 ' + large + ' 0 ' + f(p0i) + 'Z';
+}
+
+// ---------- Pie chart (SVG inner markup) ----------
+function invBuildPie(model, s) {
+  var W = 1000, H = 760;
+  var cx = 500, cy = 390, rOut = 300, rIn = Math.round(rOut * (s.pie.innerRadiusPct / 100));
+  var pal = invPalette(s.shared.palette), prec = s.shared.pctPrecision;
+  var parts = [];
+
+  // Title + subtitle (embedded so export includes them)
+  parts.push(invText(cx, 40, model.investor + ' — Investment Allocation', 26, '#1f1f1f', 'middle', 700));
+  parts.push(invText(cx, H - 22, invSubtitle(model), 17, '#555', 'middle', 400));
+
+  if (!model.categories.length) {
+    parts.push(invText(cx, cy, 'No allocation set for ' + model.investor + '.', 16, '#999', 'middle', 400));
+    return { width: W, height: H, inner: parts.join('') };
+  }
+
+  // Flatten to slices in category order; track boundaries.
+  var ang = -Math.PI; // we draw clockwise starting at top below by using cumulative from 0
+  var cursor = 0; // radians from top, clockwise
+  var TWO_PI = Math.PI * 2;
+  var seps = []; // {a, kind:'ticker'|'cat'}
+  model.categories.forEach(function (cat, ci) {
+    var base = pal[ci % pal.length];
+    var tickers = cat.tickers.length ? cat.tickers : [{ symbol: cat.name, weightPct: cat.weightPct }];
+    tickers.forEach(function (tk, ti) {
+      var a0 = cursor, a1 = cursor + tk.weightPct * TWO_PI;
+      var shadeAmt = tickers.length > 1 ? (-0.18 + (ti / Math.max(1, tickers.length - 1)) * 0.42) : 0;
+      var fill = invShade(base, shadeAmt);
+      parts.push('<path d="' + invDonutPath(cx, cy, rIn, rOut, a0, a1) + '" fill="' + fill +
+                 '" stroke="#fff" stroke-width="0.75"></path>');
+      if (ti > 0) seps.push({ a: a0, kind: 'ticker' });
+      cursor = a1;
+    });
+    seps.push({ a: cursor, kind: 'cat' });
+  });
+
+  // Separator lines: dotted between tickers, solid between categories.
+  seps.forEach(function (sp) {
+    var pi = invPolar(cx, cy, rIn, sp.a), po = invPolar(cx, cy, rOut, sp.a);
+    if (sp.kind === 'ticker') {
+      parts.push('<line x1="' + pi[0].toFixed(2) + '" y1="' + pi[1].toFixed(2) + '" x2="' + po[0].toFixed(2) +
+                 '" y2="' + po[1].toFixed(2) + '" stroke="#ffffff" stroke-width="1.2" stroke-dasharray="3,3"></line>');
+    } else {
+      parts.push('<line x1="' + pi[0].toFixed(2) + '" y1="' + pi[1].toFixed(2) + '" x2="' + po[0].toFixed(2) +
+                 '" y2="' + po[1].toFixed(2) + '" stroke="#ffffff" stroke-width="2.4"></line>');
+    }
+  });
+
+  // Category % labels on the ring (skip tiny slices to avoid clutter).
+  if (s.pie.sliceLabels) {
+    cursor = 0;
+    model.categories.forEach(function (cat) {
+      var a0 = cursor, a1 = cursor + cat.weightPct * TWO_PI, mid = (a0 + a1) / 2;
+      cursor = a1;
+      if (cat.weightPct < 0.04) return;
+      var rmid = (rIn + rOut) / 2, p = invPolar(cx, cy, rmid, mid);
+      parts.push(invText(p[0], p[1] + 5, invFmtPct(cat.weightPct, prec), 16, '#fff', 'middle', 700));
+    });
+  }
+  return { width: W, height: H, inner: parts.join('') };
+}
+
+function invText(x, y, str, size, fill, anchor, weight) {
+  return '<text x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" font-family=\'' + INV_FONT +
+         '\' font-size="' + size + '" fill="' + fill + '" text-anchor="' + (anchor || 'start') +
+         '" font-weight="' + (weight || 400) + '">' + escapeHtml(str) + '</text>';
+}
+
+// ---------- Pie legend (HTML, beside the chart) ----------
+function invBuildLegend(model, s) {
+  var pal = invPalette(s.shared.palette), prec = s.shared.pctPrecision;
+  if (!model.categories.length) return '<div class="chart-empty">No allocation.</div>';
+  var html = '';
+  model.categories.forEach(function (cat, ci) {
+    var base = pal[ci % pal.length];
+    html += '<div class="legend-cat"><div class="legend-cat-head">' +
+            '<span class="swatch" style="background:' + base + '"></span>' +
+            '<span>' + escapeHtml(cat.name) + '</span>' +
+            '<span class="pct">' + invFmtPct(cat.weightPct, prec) + '</span>' +
+            '<span class="amt">' + invFmtMoney(cat.weekly) + '/wk</span></div>';
+    var n = cat.tickers.length;
+    cat.tickers.forEach(function (tk, ti) {
+      var shadeAmt = n > 1 ? (-0.18 + (ti / Math.max(1, n - 1)) * 0.42) : 0;
+      html += '<div class="legend-ticker">' +
+              '<span class="swatch" style="background:' + invShade(base, shadeAmt) + '"></span>' +
+              '<span class="sym">' + escapeHtml(tk.symbol) + '</span>' +
+              '<span class="nm">' + escapeHtml(tk.name || '') + '</span>' +
+              '<span class="pct">' + invFmtPct(tk.weightPct, prec) + '</span>' +
+              '<span class="amt">' + invFmtMoney(tk.weekly) + '/wk</span></div>';
+    });
+    html += '</div>';
+  });
+  return html;
+}
+
+// ---------- Bar chart (SVG inner markup) ----------
+function invBuildBar(model, s) {
+  var W = 1000, H = 620, padL = 70, padR = 30, padT = 78, padB = 120;
+  var plotW = W - padL - padR, plotH = H - padT - padB;
+  var prec = s.shared.pctPrecision;
+  var data = [
+    ['6 mo', model.weightedReturns.m6], ['1 yr', model.weightedReturns.y1],
+    ['3 yr', model.weightedReturns.y3], ['5 yr', model.weightedReturns.y5]
+  ];
+  var vals = data.map(function (d) { return d[1]; });
+  var maxV = Math.max.apply(null, vals.concat([0]));
+  var minV = Math.min.apply(null, vals.concat([0]));
+  if (maxV === minV) maxV += 0.01;
+  var pad = (maxV - minV) * 0.12; maxV += pad; if (minV < 0) minV -= pad;
+  var scaleY = function (v) { return padT + plotH * (maxV - v) / (maxV - minV); };
+  var zeroY = scaleY(0);
+  var parts = [];
+  parts.push(invText(W / 2, 38, model.investor + ' — Historical Growth (strategy-weighted)', 24, '#1f1f1f', 'middle', 700));
+  parts.push(invText(W / 2, 62, invSubtitle(model), 16, '#555', 'middle', 400));
+  // zero axis
+  parts.push('<line x1="' + padL + '" y1="' + zeroY.toFixed(1) + '" x2="' + (W - padR) +
+             '" y2="' + zeroY.toFixed(1) + '" stroke="#ccc" stroke-width="1"></line>');
+  var slot = plotW / data.length, bw = slot * 0.56;
+  data.forEach(function (d, i) {
+    var v = d[1], x = padL + slot * i + (slot - bw) / 2;
+    var yTop = scaleY(Math.max(0, v)), yBot = scaleY(Math.min(0, v));
+    var h = Math.max(1, yBot - yTop);
+    parts.push('<rect x="' + x.toFixed(1) + '" y="' + yTop.toFixed(1) + '" width="' + bw.toFixed(1) +
+               '" height="' + h.toFixed(1) + '" rx="3" fill="' + s.bar.color + '"></rect>');
+    if (s.bar.showValues) {
+      var ly = v >= 0 ? yTop - 8 : yBot + 20;
+      parts.push(invText(x + bw / 2, ly, invFmtPct(v, prec), 16, '#333', 'middle', 600));
+    }
+    parts.push(invText(x + bw / 2, H - padB + 30, d[0], 17, '#444', 'middle', 600));
+  });
+  parts.push(invText(W / 2, H - 18, 'Total return over each horizon (not annualized).', 13, '#999', 'middle', 400));
+  return { width: W, height: H, inner: parts.join('') };
+}
+
+// ---------- render orchestration ----------
+function invApplySvg(svgEl, built) {
+  svgEl.setAttribute('viewBox', '0 0 ' + built.width + ' ' + built.height);
+  svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  svgEl.innerHTML = built.inner;
+}
+function invRenderCharts(investor) {
+  var st = INV[investor];
+  if (!st.model) return;
+  var s = st.settings;
+  invApplySvg(document.getElementById('inv-pie-' + investor), invBuildPie(st.model, s));
+  document.getElementById('inv-pie-legend-' + investor).innerHTML =
+    s.pie.legend ? invBuildLegend(st.model, s) : '';
+  invApplySvg(document.getElementById('inv-bar-' + investor), invBuildBar(st.model, s));
+}
+
+// ---------- settings panel ----------
+function invSettingsHtml(investor) {
+  var paletteOpts = Object.keys(PALETTES).map(function (k) { return '<option value="' + k + '">' + k + '</option>'; }).join('');
+  return '' +
+    '<div style="font-weight:600;margin-bottom:6px;">Shared</div>' +
+    '<div class="settings-grid">' +
+      '<div class="setting-row"><label>Category palette</label><select data-s="shared.palette">' + paletteOpts + '</select></div>' +
+      '<div class="setting-row"><label>% decimal places</label><input type="number" min="0" max="4" data-s="shared.pctPrecision"></div>' +
+    '</div>' +
+    '<div style="font-weight:600;margin:12px 0 6px;">Pie</div>' +
+    '<div class="settings-grid">' +
+      '<div class="setting-row"><label>Inner radius (%)</label><input type="number" min="0" max="90" data-s="pie.innerRadiusPct"></div>' +
+      '<div class="setting-row"><label>Slice % labels</label><input type="checkbox" data-s="pie.sliceLabels"></div>' +
+      '<div class="setting-row"><label>Show legend</label><input type="checkbox" data-s="pie.legend"></div>' +
+      '<div class="setting-row"><label>Export width</label><input type="number" min="200" data-s="pie.width"></div>' +
+      '<div class="setting-row"><label>Export height</label><input type="number" min="200" data-s="pie.height"></div>' +
+    '</div>' +
+    '<div style="font-weight:600;margin:12px 0 6px;">Bar</div>' +
+    '<div class="settings-grid">' +
+      '<div class="setting-row"><label>Bar color</label><input type="color" data-s="bar.color"></div>' +
+      '<div class="setting-row"><label>Show values</label><input type="checkbox" data-s="bar.showValues"></div>' +
+      '<div class="setting-row"><label>Export width</label><input type="number" min="200" data-s="bar.width"></div>' +
+      '<div class="setting-row"><label>Export height</label><input type="number" min="200" data-s="bar.height"></div>' +
+    '</div>' +
+    '<div style="margin-top:10px;"><button class="btn ghost sm" data-inv-reset="' + investor + '">Reset to defaults</button></div>';
+}
+function invApplySettingsToUi(investor) {
+  var s = INV[investor].settings, root = document.getElementById('inv-settings-' + investor);
+  root.querySelectorAll('[data-s]').forEach(function (el) {
+    var path = el.getAttribute('data-s').split('.'), v = s[path[0]][path[1]];
+    if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+  });
+}
+function invWireSettings(investor) {
+  var root = document.getElementById('inv-settings-' + investor);
+  root.innerHTML = invSettingsHtml(investor);
+  invApplySettingsToUi(investor);
+  root.querySelectorAll('[data-s]').forEach(function (el) {
+    var evt = (el.type === 'checkbox' || el.tagName === 'SELECT' || el.type === 'color') ? 'change' : 'input';
+    el.addEventListener(evt, function () {
+      var path = el.getAttribute('data-s').split('.'), s = INV[investor].settings;
+      var val = el.type === 'checkbox' ? el.checked : (el.type === 'number' ? Number(el.value) : el.value);
+      s[path[0]][path[1]] = val;
+      invRenderCharts(investor);
+      invPersistSettings(investor);
+    });
+  });
+  root.querySelector('[data-inv-reset]').addEventListener('click', function () {
+    INV[investor].settings = JSON.parse(JSON.stringify(INV_DEFAULTS));
+    invApplySettingsToUi(investor);
+    invRenderCharts(investor);
+    invPersistSettings(investor);
+  });
+}
+function invPersistSettings(investor) {
+  if (invSettingsTimers[investor]) clearTimeout(invSettingsTimers[investor]);
+  invSettingsTimers[investor] = setTimeout(function () {
+    google.script.run.saveNamedSettings('inv:' + investor, JSON.stringify(INV[investor].settings));
+  }, 600);
+}
+
+// ---------- editor (full parity) ----------
+function invRenderEditor(investor) {
+  var ed = INV[investor].editor, host = document.getElementById('inv-editor-' + investor);
+  if (!ed) { host.innerHTML = '<div class="chart-empty">Loading…</div>'; return; }
+  var cols = ed.columns, gridCols = '28px repeat(' + cols.length + ', 1fr) 32px';
+  var html = '<div class="inv-grid-head" style="grid-template-columns:' + gridCols + '">' +
+             '<div class="col-head"></div>' +
+             cols.map(function (c, i) { return '<div class="col-head">' + escapeHtml(ed.headers[i] || c) + '</div>'; }).join('') +
+             '<div class="col-head"></div></div>';
+  html += '<div id="inv-rows-' + investor + '">';
+  ed.rows.forEach(function (row) { html += invRowHtml(investor, row, cols, gridCols); });
+  html += '</div>';
+  host.innerHTML = html;
+  invWireEditor(investor);
+}
+function invRowHtml(investor, row, cols, gridCols) {
+  var cells = cols.map(function (c) { return invCellHtml(investor, row.sheetRow, c, row.cells[c]); }).join('');
+  return '<div class="inv-row-grid" draggable="true" data-row="' + row.sheetRow + '" style="grid-template-columns:' + gridCols + '">' +
+         '<div class="drag-handle" title="Drag to reorder">⋮⋮</div>' + cells +
+         '<button class="delete-btn" title="Clear this row\'s ' + investor + ' cells" data-del="' + row.sheetRow + '">×</button></div>';
+}
+function invCellHtml(investor, sheetRow, col, cell) {
+  cell = cell || { display: '', formula: '', raw: '' };
+  var isF = cell.formula && String(cell.formula).charAt(0) === '=';
+  var inner = (isF ? '<div class="formula-text">' + escapeHtml(cell.formula) + '</div>' : '') +
+              '<div class="display-text">' + escapeHtml(cell.display) + '</div>';
+  return '<div class="cell' + (isF ? ' is-formula' : '') + '" data-cell="' + sheetRow + ':' + col + '" tabindex="0">' + inner + '</div>';
+}
+function invWireEditor(investor) {
+  var host = document.getElementById('inv-editor-' + investor);
+  host.querySelectorAll('.cell').forEach(function (cellEl) {
+    cellEl.addEventListener('click', function () { invBeginEdit(investor, cellEl); });
+  });
+  host.querySelectorAll('[data-del]').forEach(function (btn) {
+    btn.addEventListener('click', function () { invDeleteRow(investor, Number(btn.getAttribute('data-del'))); });
+  });
+  invWireDrag(investor, host);
+}
+function invBeginEdit(investor, cellEl) {
+  if (cellEl.querySelector('input')) return;
+  var key = cellEl.getAttribute('data-cell'), parts = key.split(':');
+  var sheetRow = Number(parts[0]), col = parts[1];
+  var row = (INV[investor].editor.rows.filter(function (r) { return r.sheetRow === sheetRow; })[0]) || { cells: {} };
+  var cell = row.cells[col] || { formula: '', raw: '', display: '' };
+  var prefill = (cell.formula && String(cell.formula).charAt(0) === '=') ? cell.formula
+              : (cell.raw === null || cell.raw === undefined ? '' : String(cell.raw));
+  cellEl.classList.add('editing');
+  cellEl.innerHTML = '';
+  var input = document.createElement('input');
+  input.type = 'text'; input.value = prefill;
+  cellEl.appendChild(input); input.focus(); input.select();
+  var done = false;
+  var commit = function (save) {
+    if (done) return; done = true;
+    cellEl.classList.remove('editing');
+    if (save) invWriteCell(investor, sheetRow, col, input.value);
+    else invRenderEditor(investor);
+  };
+  input.addEventListener('blur', function () { commit(true); });
+  input.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); commit(false); }
+  });
+}
+function invWriteCell(investor, sheetRow, col, newText) {
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      var st = INV[investor]; st.hash = resp.hash;
+      var row = st.editor.rows.filter(function (r) { return r.sheetRow === sheetRow; })[0];
+      if (row) row.cells[col] = { display: resp.cell.display, formula: resp.cell.formula, raw: resp.cell.raw };
+      invRenderEditor(investor);
+      invReloadModel(investor); // charts depend on the edited cell
+    })
+    .withFailureHandler(function (e) { toast('Save failed: ' + (e && e.message ? e.message : e)); invRenderEditor(investor); })
+    .writeInvestmentCell({ investor: investor, sheetRow: sheetRow, col: col, newText: newText });
+}
+function invAddRow(investor) {
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      var st = INV[investor]; st.hash = resp.hash;
+      st.editor.rows.push(resp.row);
+      invRenderEditor(investor);
+    })
+    .withFailureHandler(function (e) { toast('Add row failed: ' + (e && e.message ? e.message : e)); })
+    .appendInvestmentRow(investor);
+}
+function invDeleteRow(investor, sheetRow) {
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      var st = INV[investor]; st.hash = resp.hash;
+      st.editor.rows = st.editor.rows.filter(function (r) { return r.sheetRow !== sheetRow; });
+      invRenderEditor(investor);
+      invReloadModel(investor);
+    })
+    .withFailureHandler(function (e) { toast('Clear row failed: ' + (e && e.message ? e.message : e)); })
+    .clearInvestmentRow({ investor: investor, sheetRow: sheetRow });
+}
+var invDragRow = null;
+function invWireDrag(investor, host) {
+  host.querySelectorAll('.inv-row-grid').forEach(function (rowEl) {
+    rowEl.addEventListener('dragstart', function () { invDragRow = Number(rowEl.getAttribute('data-row')); rowEl.classList.add('is-dragging'); });
+    rowEl.addEventListener('dragend', function () { rowEl.classList.remove('is-dragging'); host.querySelectorAll('.inv-row-grid').forEach(function (r) { r.classList.remove('drag-over-above', 'drag-over-below'); }); });
+    rowEl.addEventListener('dragover', function (ev) {
+      ev.preventDefault();
+      var tgt = Number(rowEl.getAttribute('data-row'));
+      rowEl.classList.toggle('drag-over-above', invDragRow > tgt);
+      rowEl.classList.toggle('drag-over-below', invDragRow < tgt);
+    });
+    rowEl.addEventListener('dragleave', function () { rowEl.classList.remove('drag-over-above', 'drag-over-below'); });
+    rowEl.addEventListener('drop', function (ev) {
+      ev.preventDefault();
+      var toRow = Number(rowEl.getAttribute('data-row'));
+      if (invDragRow && invDragRow !== toRow) invMoveRow(investor, invDragRow, toRow);
+      invDragRow = null;
+    });
+  });
+}
+function invMoveRow(investor, fromRow, toRow) {
+  if (!INV_REORDER_WARNED) {
+    INV_REORDER_WARNED = true;
+    if (!window.confirm('Reordering moves the entire spreadsheet row, so BOTH investors\' columns move together. Continue?')) {
+      return;
+    }
+    google.script.run.setReorderAck();
+  }
+  google.script.run
+    .withSuccessHandler(function (resp) { INV[investor].hash = resp.hash; invReload(investor); })
+    .withFailureHandler(function (e) { toast('Reorder failed: ' + (e && e.message ? e.message : e)); })
+    .moveInvestmentRow(investor, fromRow, toRow);
+}
+
+// ---------- export per chart ----------
+function invExport(investor, chart, kind) {
+  var st = INV[investor]; if (!st.model) return;
+  var svgEl = document.getElementById('inv-' + chart + '-' + investor);
+  var svgStr = serializeSvg(svgEl, '');
+  var dims = st.settings[chart];
+  if (kind === 'png') exportSvgStringToPng(svgStr, dims.width, dims.height, investor + '-' + chart + '-' + Date.now() + '.png');
+  else exportSvgStringToPdf(svgStr);
+}
+
+// ---------- page build + lazy load ----------
+function invPageHtml(investor) {
+  return '' +
+    '<details class="panel" open><summary>Allocation' +
+      '<span class="chart-toolbar">' +
+        '<button class="btn ghost sm" data-x="' + investor + '|pie|png">PNG</button>' +
+        '<button class="btn ghost sm" data-x="' + investor + '|pie|pdf">PDF</button>' +
+      '</span></summary>' +
+      '<div class="panel-body"><div class="chart-layout">' +
+        '<div class="chart-wrap"><svg id="inv-pie-' + investor + '" class="chart-svg"></svg></div>' +
+        '<div class="pie-legend" id="inv-pie-legend-' + investor + '"></div>' +
+      '</div></div></details>' +
+    '<details class="panel" open><summary>Historical growth rate' +
+      '<span class="chart-toolbar">' +
+        '<button class="btn ghost sm" data-x="' + investor + '|bar|png">PNG</button>' +
+        '<button class="btn ghost sm" data-x="' + investor + '|bar|pdf">PDF</button>' +
+      '</span></summary>' +
+      '<div class="panel-body"><div class="chart-wrap"><svg id="inv-bar-' + investor + '" class="chart-svg"></svg></div></div></details>' +
+    '<details class="panel"><summary>Chart settings</summary>' +
+      '<div class="panel-body" id="inv-settings-' + investor + '"></div></details>' +
+    '<details class="panel"><summary>' + investor + ' data editor</summary>' +
+      '<div class="panel-body"><div id="inv-editor-' + investor + '"><div class="chart-empty">Loading…</div></div>' +
+        '<div style="margin-top:10px;"><button class="btn ghost sm" data-addrow="' + investor + '">+ Add row</button></div>' +
+      '</div></details>';
+}
+function invBuildPage(investor) {
+  var page = document.getElementById('page-' + investor.toLowerCase());
+  page.innerHTML = invPageHtml(investor);
+  invWireSettings(investor);
+  page.querySelectorAll('[data-x]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var p = btn.getAttribute('data-x').split('|'); invExport(p[0], p[1], p[2]);
+    });
+  });
+  page.querySelector('[data-addrow]').addEventListener('click', function () { invAddRow(investor); });
+  INV[investor].built = true;
+}
+function invLoad(investor) {
+  google.script.run
+    .withSuccessHandler(function (model) {
+      var st = INV[investor]; st.model = model; st.hash = model.hash; st.loaded = true;
+      invRenderCharts(investor);
+    })
+    .withFailureHandler(function (e) { toast('Load failed: ' + (e && e.message ? e.message : e)); })
+    .getInvestmentData(investor);
+  google.script.run
+    .withSuccessHandler(function (editor) { INV[investor].editor = editor; INV[investor].hash = editor.hash; invRenderEditor(investor); })
+    .withFailureHandler(function (e) { toast('Editor load failed: ' + (e && e.message ? e.message : e)); })
+    .getInvestmentEditor(investor);
+}
+function invReload(investor) {
+  invLoad(investor);
+}
+function invReloadModel(investor) {
+  google.script.run
+    .withSuccessHandler(function (model) { INV[investor].model = model; INV[investor].hash = model.hash; invRenderCharts(investor); })
+    .withFailureHandler(function () {})
+    .getInvestmentData(investor);
+}
+function invLoadSettings(investor, cb) {
+  google.script.run
+    .withSuccessHandler(function (saved) {
+      var d = JSON.parse(JSON.stringify(INV_DEFAULTS));
+      if (saved && typeof saved === 'object') {
+        ['shared', 'pie', 'bar'].forEach(function (g) { if (saved[g]) for (var k in saved[g]) d[g][k] = saved[g][k]; });
+      }
+      INV[investor].settings = d;
+      cb();
+    })
+    .withFailureHandler(function () { INV[investor].settings = JSON.parse(JSON.stringify(INV_DEFAULTS)); cb(); })
+    .getNamedSettings('inv:' + investor);
+}
+
+// ---------- tab navigation ----------
+function invActivatePage(page) {
+  ACTIVE_PAGE = page;
+  ['sankey', 'anchal', 'anamika'].forEach(function (p) {
+    var el = document.getElementById('page-' + p);
+    if (el) el.classList.toggle('active', p === page);
+  });
+  document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t.getAttribute('data-page') === page); });
+  document.getElementById('tabs').classList.remove('open');
+  document.getElementById('hamburger').setAttribute('aria-expanded', 'false');
+  document.getElementById('sankey-export').style.display = (page === 'sankey') ? 'inline-flex' : 'none';
+  var titles = { sankey: 'PayrollSankey', anchal: 'Anchal — Investments', anamika: 'Anamika — Investments' };
+  document.getElementById('page-title').textContent = titles[page] || 'PayrollSankey';
+
+  if (page === 'anchal' || page === 'anamika') {
+    var investor = page === 'anchal' ? 'Anchal' : 'Anamika';
+    var st = INV[investor];
+    if (!st.built) {
+      if (!st.settings) { invLoadSettings(investor, function () { invBuildPage(investor); invLoad(investor); }); }
+      else { invBuildPage(investor); invLoad(investor); }
+    }
+  }
+}
+document.querySelectorAll('.tab').forEach(function (t) {
+  t.addEventListener('click', function () { invActivatePage(t.getAttribute('data-page')); });
+});
+document.getElementById('hamburger').addEventListener('click', function () {
+  var tabs = document.getElementById('tabs'), open = tabs.classList.toggle('open');
+  this.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+
+// ---------- investment polling (active investor page only) ----------
+function invStartPolling() {
+  setInterval(function () {
+    if (ACTIVE_PAGE !== 'anchal' && ACTIVE_PAGE !== 'anamika') return;
+    var investor = ACTIVE_PAGE === 'anchal' ? 'Anchal' : 'Anamika';
+    var st = INV[investor];
+    if (!st.loaded || !st.hash) return;
+    // skip if a cell is mid-edit
+    if (document.querySelector('#page-' + ACTIVE_PAGE + ' .cell input')) return;
+    google.script.run
+      .withSuccessHandler(function (resp) {
+        if (!resp.changed) return;
+        st.hash = resp.hash; st.model = resp.model; st.editor = resp.editor;
+        invRenderCharts(investor); invRenderEditor(investor);
+        toast(investor + ' data updated from the sheet.');
+      })
+      .withFailureHandler(function () {})
+      .pollInvestment(investor, st.hash);
+  }, POLL_INTERVAL_MS);
 }
 
 // =====================  Initial wiring  =====================
@@ -1280,6 +1901,7 @@ document.getElementById('reset-settings').addEventListener('click', function () 
 
 // Begin polling
 startPolling();
+invStartPolling();
 
 })();
 </script>
