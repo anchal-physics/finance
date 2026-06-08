@@ -64,6 +64,28 @@ function moveRowOnSheet_(sheet, fromRow, toRow) {
   SpreadsheetApp.flush();
 }
 
+/**
+ * Auto-fill "output-only" formula columns into a newly-created row. For each
+ * spec {col, template}, copies the formula DOWN from fromRow — using Sheets'
+ * native relative-reference rules (so e.g. $D4 becomes $D5) — or, if fromRow
+ * has no formula in that column, writes `template` with `{ROW}` -> toRow.
+ *
+ * Generic and reusable: any feature's data editor can declare such columns and
+ * call this after inserting/appending a row. (See Investment.gs's
+ * INVESTMENT_AUTOFILL / INVESTMENT_READONLY_COLS for the ETF-name column.)
+ */
+function copyDownFormulas_(sheet, fromRow, toRow, specs) {
+  (specs || []).forEach(function (spec) {
+    var c = colLetterToIndex_(spec.col) + 1;
+    var src = (fromRow >= 1) ? sheet.getRange(fromRow, c) : null;
+    if (src && src.getFormula()) {
+      src.copyTo(sheet.getRange(toRow, c), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+    } else if (spec.template) {
+      sheet.getRange(toRow, c).setFormula(spec.template.replace(/\{ROW\}/g, String(toRow)));
+    }
+  });
+}
+
 
 // =====================  Settings (shared / generic)  =====================
 

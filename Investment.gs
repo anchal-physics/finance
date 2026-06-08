@@ -29,15 +29,26 @@ var INVESTMENT_SHEET_NAME = 'Investment';
 // 0-based column indices into a row read from A1 (A=0 … O=14).
 var INVESTORS_ = {
   Anchal:  { investor: 'Anchal',  catPctIdx: 1, erIdx: 5, weightIdx: 6, weeklyIdx: 7,
-             editorCols: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] },
+             nameCol: 'A', catPctCol: 'B', baseCol: 'H', weightCol: 'G',
+             tickerCols: ['D', 'E', 'F', 'G', 'H'], investorCols: ['F', 'G', 'H'] },
   Anamika: { investor: 'Anamika', catPctIdx: 2, erIdx: 8, weightIdx: 9, weeklyIdx: 10,
-             editorCols: ['A', 'B', 'C', 'D', 'E', 'I', 'J', 'K'] }
+             nameCol: 'A', catPctCol: 'C', baseCol: 'K', weightCol: 'J',
+             tickerCols: ['D', 'E', 'I', 'J', 'K'], investorCols: ['I', 'J', 'K'] }
 };
 
 // Read window for the Investment sheet (1-based rows, columns A:O).
 var INVESTMENT_FIRST_DATA_ROW = 4;   // row 4 = first ticker
 var INVESTMENT_LAST_SCAN_ROW = 200;  // generous cap for appended rows
 var INVESTMENT_NUM_COLS = 15;        // A:O
+
+// Output-only columns (shared by both investors): the editor shows the computed
+// value (never the formula) and disallows editing; new rows auto-fill the
+// formula via copyDownFormulas_ (Webapp.gs). The ETF-name column E runs
+// GOOGLEFINANCE on the symbol in D. Generic — add specs here to auto-fill more.
+var INVESTMENT_READONLY_COLS = ['E'];
+var INVESTMENT_AUTOFILL = [
+  { col: 'E', template: '=IFERROR(GOOGLEFINANCE($D{ROW}, "name"), "")' }
+];
 
 function invConfig_(investor) {
   var cfg = INVESTORS_[investor];
@@ -125,16 +136,18 @@ function getInvestmentData(investor) {
   return model;
 }
 
-// ---------- Investment editor (full parity: cells + add/clear/move) ----------
+// ---------- Investment editor (broad categories as sub-panels) ----------
+//
+// Column A (broad category) is SHARED by both investors, so the category blocks
+// are identical on both tabs; only the weight/$ columns differ. The editor
+// groups ticker rows into per-category sub-panels (a category "owns" the rows
+// from its A-labelled header row down to the row before the next A-labelled
+// row), exposes the weekly base (H3 Anchal / K3 Anamika), and supports adding a
+// stock (a row inside a category) or a whole new category.
 
-/**
- * Editor snapshot for one investor: each data row's exposed cells with
- * display value + formula, plus a hash for external-edit polling.
- */
 function getInvestmentEditor(investor) {
   var cfg = invConfig_(investor);
-  var sheet = getInvestmentSheet_();
-  return buildInvestmentEditor_(sheet, cfg);
+  return buildInvestmentEditor_(getInvestmentSheet_(), cfg);
 }
 
 function buildInvestmentEditor_(sheet, cfg) {
@@ -144,28 +157,68 @@ function buildInvestmentEditor_(sheet, cfg) {
   var displays = rng.getDisplayValues();
   var formulas = rng.getFormulas();
   var values = rng.getValues();
-  var colIdx = cfg.editorCols.map(colLetterToIndex_);  // 0-based
-  var headers = colIdx.map(function (ci) {
-    return invStr_(displays[1][ci]) || invStr_(values[1][ci]) || cfg.editorCols[colIdx.indexOf(ci)];
+
+  var Ai = colLetterToIndex_('A'), Di = colLetterToIndex_('D');
+  var tickerIdx = cfg.tickerCols.map(colLetterToIndex_);
+  var headers = tickerIdx.map(function (ci, k) {
+    return invStr_(displays[1][ci]) || invStr_(values[1][ci]) || cfg.tickerCols[k];
   });
-  var rows = [];
-  for (var r = INVESTMENT_FIRST_DATA_ROW - 1; r < numRows; r++) {
-    var cells = {};
-    var hasContent = false;
-    for (var k = 0; k < colIdx.length; k++) {
-      var ci = colIdx[k], letter = cfg.editorCols[k];
-      var disp = displays[r][ci], f = formulas[r][ci], raw = values[r][ci];
-      if (!invBlank_(disp) || !invBlank_(f) || !invBlank_(raw)) hasContent = true;
-      cells[letter] = { display: disp, formula: f, raw: raw };
-    }
-    if (!hasContent) continue;
-    rows.push({ sheetRow: r + 1, cells: cells });
+
+  function cellAt(r, letter) {
+    var ci = colLetterToIndex_(letter);
+    return { display: displays[r][ci], formula: formulas[r][ci], raw: values[r][ci] };
   }
+  function rowCells(r) {
+    var cells = {};
+    cfg.tickerCols.forEach(function (letter) { cells[letter] = cellAt(r, letter); });
+    return { sheetRow: r + 1, cells: cells };
+  }
+  // "Real" content = category name (A), symbol (D), or this investor's
+  // allocation cols (F/G/H or I/J/K). Deliberately ignores E and L:O, which
+  // hold derived GOOGLEFINANCE formulas even on blank rows (e.g. the row-46
+  // spill artifact), so those don't masquerade as holdings.
+  var invIdx = cfg.investorCols.map(colLetterToIndex_);
+  function rowHasContent(r) {
+    if (!invBlank_(values[r][Ai]) || !invBlank_(values[r][Di])) return true;
+    return invIdx.some(function (ci) { return !invBlank_(values[r][ci]); });
+  }
+
+  // header rows (col A non-blank) and the last row with real content
+  var headerRows = [], lastContent = INVESTMENT_FIRST_DATA_ROW - 2; // 0-based
+  for (var r = INVESTMENT_FIRST_DATA_ROW - 1; r < numRows; r++) {
+    if (!invBlank_(values[r][Ai])) headerRows.push(r);
+    if (rowHasContent(r)) lastContent = r;
+  }
+
+  var categories = [];
+  for (var i = 0; i < headerRows.length; i++) {
+    var hr = headerRows[i];
+    var spanEnd = (i < headerRows.length - 1) ? headerRows[i + 1] - 1 : Math.max(hr, lastContent);
+    var rows = [];
+    for (var rr = hr; rr <= spanEnd; rr++) rows.push(rowCells(rr));
+    categories.push({
+      headerRow: hr + 1,
+      name: invStr_(displays[hr][Ai]) || invStr_(values[hr][Ai]),
+      catPct: cellAt(hr, cfg.catPctCol),
+      rows: rows
+    });
+  }
+
   return {
     investor: cfg.investor,
-    columns: cfg.editorCols,
+    columns: cfg.tickerCols,
     headers: headers,
-    rows: rows,
+    weightCol: cfg.weightCol,       // client highlights non-zero cells in this column
+    readonlyCols: INVESTMENT_READONLY_COLS,
+    catPctCol: cfg.catPctCol,
+    nameCol: cfg.nameCol,
+    base: {
+      sheetRow: 3, col: cfg.baseCol,
+      display: displays[2][colLetterToIndex_(cfg.baseCol)],
+      formula: formulas[2][colLetterToIndex_(cfg.baseCol)],
+      raw: values[2][colLetterToIndex_(cfg.baseCol)]
+    },
+    categories: categories,
     hash: snapshotHashFrom_(values, formulas)
   };
 }
@@ -189,12 +242,17 @@ function pollInvestment(investor, lastHash) {
 }
 
 /**
- * Write one Investment cell. col is a column LETTER (must be in the investor's
- * editor columns). Auto-detects formula vs literal via setCellSmart_.
+ * Write one Investment cell. col is a column LETTER; editable cols are the
+ * per-ticker columns plus the category name (A), the category % (B/C) and the
+ * weekly base (H/K). Auto-detects formula vs literal via setCellSmart_.
  */
 function writeInvestmentCell(payload) {
   var cfg = invConfig_(payload.investor);
-  if (cfg.editorCols.indexOf(payload.col) < 0) {
+  if (INVESTMENT_READONLY_COLS.indexOf(payload.col) >= 0) {
+    throw new Error('Column ' + payload.col + ' is output-only (auto-filled).');
+  }
+  var allowed = cfg.tickerCols.concat([cfg.nameCol, cfg.catPctCol, cfg.baseCol]);
+  if (allowed.indexOf(payload.col) < 0) {
     throw new Error('Column ' + payload.col + ' is not editable for ' + cfg.investor + '.');
   }
   var sheet = getInvestmentSheet_();
@@ -210,44 +268,74 @@ function writeInvestmentCell(payload) {
   };
 }
 
-/** Append an empty data row after the last occupied row on the Investment sheet. */
-function appendInvestmentRow(investor) {
+/**
+ * Add a stock (row) to a category. Inserts a sheet row just BELOW the
+ * category's header row so the category's `=Sum(G..)`-style % formula extends
+ * to include it. Rows are shared, so this shifts both investors' columns. The
+ * new row's weight is seeded to 0 (so it shows up and reads as a 0% holding).
+ */
+function addInvestmentStock(investor, headerRow) {
   var cfg = invConfig_(investor);
   var sheet = getInvestmentSheet_();
-  var lastRow = Math.min(sheet.getLastRow(), INVESTMENT_LAST_SCAN_ROW);
-  var newRow = Math.max(INVESTMENT_FIRST_DATA_ROW, lastRow + 1);
-  if (newRow > INVESTMENT_LAST_SCAN_ROW) throw new Error('Row cap of ' + INVESTMENT_LAST_SCAN_ROW + ' reached.');
+  var at = headerRow + 1;
+  insertRowOnSheet_(sheet, at);
+  sheet.getRange(at, colLetterToIndex_(cfg.weightCol) + 1).setValue(0);
+  copyDownFormulas_(sheet, at - 1, at, INVESTMENT_AUTOFILL); // ETF-name etc. from the row above
   SpreadsheetApp.flush();
-  var cells = {};
-  cfg.editorCols.forEach(function (c) { cells[c] = { display: '', formula: '', raw: '' }; });
-  return {
-    sheetRow: newRow,
-    row: { sheetRow: newRow, cells: cells },
-    hash: investmentEditorHash_(sheet, cfg)
-  };
+  return buildInvestmentEditor_(sheet, cfg);
 }
 
-/** Clear only this investor's editor cells in a row (leaves the other investor intact). */
+/**
+ * Add a whole new broad category: appends a new block at the bottom with the
+ * name in column A (one empty stock row). The user then fills in the first
+ * ticker and weights, and the category % formula.
+ */
+function addInvestmentCategory(investor, name) {
+  var cfg = invConfig_(investor);
+  var sheet = getInvestmentSheet_();
+  var newRow = lastInvestmentContentRow_(sheet) + 1;
+  if (newRow < INVESTMENT_FIRST_DATA_ROW) newRow = INVESTMENT_FIRST_DATA_ROW;
+  if (newRow > INVESTMENT_LAST_SCAN_ROW) throw new Error('Row cap of ' + INVESTMENT_LAST_SCAN_ROW + ' reached.');
+  sheet.getRange(newRow, colLetterToIndex_(cfg.nameCol) + 1).setValue(String(name == null ? '' : name).trim() || 'New Category');
+  copyDownFormulas_(sheet, newRow - 1, newRow, INVESTMENT_AUTOFILL); // seed ETF-name formula for the first stock
+  SpreadsheetApp.flush();
+  return buildInvestmentEditor_(sheet, cfg);
+}
+
+/** Clear only this investor's allocation cells (F/G/H or I/J/K) in a row. */
 function clearInvestmentRow(payload) {
   var cfg = invConfig_(payload.investor);
   var sheet = getInvestmentSheet_();
-  cfg.editorCols.forEach(function (letter) {
+  cfg.investorCols.forEach(function (letter) {
     sheet.getRange(payload.sheetRow, colLetterToIndex_(letter) + 1).clearContent();
   });
   SpreadsheetApp.flush();
   return { hash: investmentEditorHash_(sheet, cfg) };
 }
 
-/**
- * Move a whole Investment row (drag-reorder). Like PayrollSankey, this shifts
- * the entire spreadsheet row, so BOTH investors' columns move together — the
- * UI warns about this before the first reorder.
- */
-function moveInvestmentRow(investor, fromRow, toRow) {
-  var cfg = invConfig_(investor);
-  var sheet = getInvestmentSheet_();
-  if (fromRow !== toRow) moveRowOnSheet_(sheet, fromRow, toRow);
-  return { hash: investmentEditorHash_(sheet, cfg) };
+/** Insert a blank ROW at 1-based atRow on a sheet (inherits formatting from above). */
+function insertRowOnSheet_(sheet, atRow) {
+  Sheets.Spreadsheets.batchUpdate(
+    { requests: [{ insertDimension: {
+      range: { sheetId: sheet.getSheetId(), dimension: 'ROWS', startIndex: atRow - 1, endIndex: atRow },
+      inheritFromBefore: atRow > 1
+    } }] },
+    SpreadsheetApp.getActive().getId()
+  );
+  SpreadsheetApp.flush();
+}
+
+/** Last 1-based row with a category name (A) or symbol (D); ignores L:O spill. */
+function lastInvestmentContentRow_(sheet) {
+  var lastRow = Math.min(sheet.getLastRow(), INVESTMENT_LAST_SCAN_ROW);
+  var numRows = Math.max(INVESTMENT_FIRST_DATA_ROW, lastRow);
+  var v = sheet.getRange(1, 1, numRows, INVESTMENT_NUM_COLS).getValues();
+  var Ai = colLetterToIndex_('A'), Di = colLetterToIndex_('D');
+  var last = INVESTMENT_FIRST_DATA_ROW - 1;
+  for (var r = INVESTMENT_FIRST_DATA_ROW - 1; r < numRows; r++) {
+    if (!invBlank_(v[r][Ai]) || !invBlank_(v[r][Di])) last = r + 1;
+  }
+  return last;
 }
 
 

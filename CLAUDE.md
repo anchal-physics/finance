@@ -57,7 +57,7 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 | ~~`Sankey.gs`~~ | **Deleted** (in git history at/before this point). Legacy copy/paste-to-sankeydiagram.net converter, superseded by `SankeyRenderer.gs`. Removed from `.clasp.json` `filePushOrder` too. | gone |
 | `Webapp.gs` | **Thin top-level combiner only**: `doGet` (routing), `include()`, and cross-feature server code shared by all tabs — print-to-PDF handoff (`storePrintSvg`/`servePrintPage_`), generic named settings (`getNamedSettings`/`saveNamedSettings`), reorder ack, and shared helpers (`setCellSmart_`, `moveRowOnSheet_`, `safeGetUserEmail_`). No feature logic. Add a feature ⇒ add a new `<Feature>.gs`; Webapp only routes. ~150 lines. | yes |
 | `PayrollSankey.gs` | Server for the PayrollSankey landing tab: bootstrap payload, snapshot/polling, cell writes, row add/delete/move (`moveSheetRow`), settings + subpanel locks, `getEffectiveRange_`, `addNewLevel`. | yes |
-| `Investment.gs` | Server for the Anchal/Anamika tabs: `computeInvestmentModel_`, `getInvestmentData`, editor endpoints (`getInvestmentEditor`, `writeInvestmentCell`, append/clear/move row, `pollInvestment`), + investment-only helpers. | yes |
+| `Investment.gs` | Server for the Anchal/Anamika tabs: `computeInvestmentModel_`, `getInvestmentData`, editor endpoints (`getInvestmentEditor`, `writeInvestmentCell`, `addInvestmentStock`/`addInvestmentCategory`, `clearInvestmentRow`, `pollInvestment`), read-only/auto-fill column config, + investment-only helpers. | yes |
 | `WebappPage.html` | **Shell only** — `<head>`, topbar, tab nav, page containers, and the one `<script>` IIFE that stitches the client modules via `<?!= include('…') ?>`. The actual code lives in the partials below. | yes |
 | `Styles.html` | All CSS (the `<style>` block), included into `<head>`. | yes |
 | `PayrollSankeyPage.html` | Static markup for the PayrollSankey landing page's 3 panels. | yes |
@@ -291,15 +291,41 @@ row. The aggregation in `Webapp.gs` (`computeInvestmentModel_`) was verified
 in node against the sheet's `F3`/`G3`/`L3:O3` for Anchal (exact match) and
 computes Anamika correctly by `J`.
 
-**Server endpoints** (`Webapp.gs`): `getInvestmentData(investor)` →
-chart model; `getInvestmentEditor(investor)` / `writeInvestmentCell` /
-`appendInvestmentRow` / `clearInvestmentRow` / `moveInvestmentRow` /
+**Server endpoints** (`Investment.gs`): `getInvestmentData(investor)` →
+chart model; `getInvestmentEditor` / `writeInvestmentCell` /
+`addInvestmentStock` / `addInvestmentCategory` / `clearInvestmentRow` /
 `pollInvestment` for the editor; `getNamedSettings`/`saveNamedSettings`
-for per-user, per-chart settings (key `inv:<investor>`). Editor columns:
-Anchal `A–H`, Anamika `A–E + I–K`. The charts and editor client code live in
-`InvestmentJs.html` (hand-rolled SVG, no chart lib); the reusable export
-pipeline (`serializeSvg` + `exportSvgStringToPng` / `exportSvgStringToPdf`)
-lives in `CoreJs.html`.
+(in `Webapp.gs`) for per-user, per-chart settings (key `inv:<investor>`).
+The charts and editor client code live in `InvestmentJs.html` (hand-rolled
+SVG, no chart lib); the reusable export pipeline (`serializeSvg` +
+`exportSvgStringToPng` / `exportSvgStringToPdf`) lives in `CoreJs.html`.
+
+**Editor model (category sub-panels).** Because column A is *shared* by both
+investors, the broad categories are one structure on both tabs. The editor:
+- groups ticker rows into **per-category collapsible sub-panels** (a category
+  owns rows from its A-labelled header down to the row before the next A row);
+  the sub-panel title is the editable category name (col A).
+- shows a **weekly-base box (`H3`/`K3`)** at the top — edit the total weekly
+  investment directly.
+- per-row columns are ticker-level only (Anchal `D,E,F,G,H` / Anamika
+  `D,E,I,J,K`); the category % (`B`/`C`) sits in the sub-panel header.
+- **+ Add stock** inserts a sheet row *just below the category header* (so the
+  category's `=Sum(G..)` % auto-extends), seeds the weight to 0, and auto-fills
+  output columns. **+ Add broad category** appends a new block at the bottom.
+  Both shift shared rows → a one-time confirm warns that both investors move.
+- per-row **×** clears only this investor's allocation cols (`F,G,H`/`I,J,K`).
+- non-zero **Target %** cells (`G`/`J`) get a half-transparent forest-green
+  background (`.wt-nonzero`) to spotlight active allocations.
+- no drag-reorder (doesn't map to category blocks).
+
+**Read-only / auto-fill columns (generic, reusable).** `INVESTMENT_READONLY_COLS`
++ `INVESTMENT_AUTOFILL` (in `Investment.gs`) mark output-only columns — the ETF
+name `E` (runs `GOOGLEFINANCE($D{ROW},"name")`). The editor renders them
+value-only (no formula, not editable; `writeInvestmentCell` rejects writes).
+On row insert/append, the shared helper **`copyDownFormulas_(sheet, fromRow,
+toRow, specs)`** (in `Webapp.gs`) copies each such formula DOWN using Sheets'
+relative-reference rules (or a `{ROW}` template if the source has none). Any
+future editor can declare the same config + call `copyDownFormulas_`.
 
 ---
 

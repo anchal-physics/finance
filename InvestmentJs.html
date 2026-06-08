@@ -242,50 +242,85 @@ function invPersistSettings(investor) {
   }, 600);
 }
 
-// ---------- editor (full parity) ----------
+// ---------- editor (broad-category sub-panels) ----------
 function invRenderEditor(investor) {
   var ed = INV[investor].editor, host = document.getElementById('inv-editor-' + investor);
   if (!ed) { host.innerHTML = '<div class="chart-empty">Loading…</div>'; return; }
-  var cols = ed.columns, gridCols = '28px repeat(' + cols.length + ', 1fr) 32px';
-  var html = '<div class="inv-grid-head" style="grid-template-columns:' + gridCols + '">' +
-             '<div class="col-head"></div>' +
-             cols.map(function (c, i) { return '<div class="col-head">' + escapeHtml(ed.headers[i] || c) + '</div>'; }).join('') +
-             '<div class="col-head"></div></div>';
-  html += '<div id="inv-rows-' + investor + '">';
-  ed.rows.forEach(function (row) { html += invRowHtml(investor, row, cols, gridCols); });
-  html += '</div>';
+  var st = INV[investor];
+  if (!st.closedCats) st.closedCats = {};
+  // preserve which category panels are collapsed across re-renders
+  host.querySelectorAll('details.inv-cat').forEach(function (d) {
+    st.closedCats[d.getAttribute('data-cat')] = !d.open;
+  });
+  var cols = ed.columns, ro = ed.readonlyCols || [];
+  var gridCols = 'repeat(' + cols.length + ', 1fr) 34px';
+  var html = '';
+
+  // Weekly base box (H3 / K3) at the top of the editing tools.
+  html += '<div class="inv-base"><label>Total weekly investment</label>' +
+          invCellHtml(ed.base.sheetRow, ed.base.col, ed.base, {}) + '</div>';
+
+  // One collapsible sub-panel per broad category.
+  ed.categories.forEach(function (cat, ci) {
+    var open = st.closedCats[ci] ? '' : ' open';
+    html += '<details class="subpanel inv-cat"' + open + ' data-cat="' + ci + '"><summary>' +
+              '<span class="cat-title">' + invCellHtml(cat.headerRow, ed.nameCol, { display: cat.name, formula: '', raw: cat.name }, { plain: true }) + '</span>' +
+              '<span class="cat-meta">total ' + invCellHtml(cat.headerRow, ed.catPctCol, cat.catPct, { plain: true }) +
+                '<button class="btn ghost sm" data-addstock="' + cat.headerRow + '">+ Add stock</button></span>' +
+            '</summary><div class="subpanel-body">' +
+              '<div class="inv-grid-head" style="grid-template-columns:' + gridCols + '">' +
+                cols.map(function (c, i) { return '<div class="col-head">' + escapeHtml(ed.headers[i] || c) + '</div>'; }).join('') +
+                '<div class="col-head"></div></div>';
+    cat.rows.forEach(function (row) {
+      html += '<div class="inv-row-grid" style="grid-template-columns:' + gridCols + '">' +
+        cols.map(function (c) {
+          return invCellHtml(row.sheetRow, c, row.cells[c], { weight: c === ed.weightCol, readonly: ro.indexOf(c) >= 0 });
+        }).join('') +
+        '<button class="delete-btn" title="Clear this stock\'s ' + investor + ' allocation" data-clear="' + row.sheetRow + '">×</button>' +
+      '</div>';
+    });
+    html += '</div></details>';
+  });
+
+  html += '<div class="inv-addcat"><button class="btn ghost sm" data-addcat="1">+ Add broad category</button></div>';
   host.innerHTML = html;
-  invWireEditor(investor);
 }
-function invRowHtml(investor, row, cols, gridCols) {
-  var cells = cols.map(function (c) { return invCellHtml(investor, row.sheetRow, c, row.cells[c]); }).join('');
-  return '<div class="inv-row-grid" draggable="true" data-row="' + row.sheetRow + '" style="grid-template-columns:' + gridCols + '">' +
-         '<div class="drag-handle" title="Drag to reorder">⋮⋮</div>' + cells +
-         '<button class="delete-btn" title="Clear this row\'s ' + investor + ' cells" data-del="' + row.sheetRow + '">×</button></div>';
-}
-function invCellHtml(investor, sheetRow, col, cell) {
+
+// opts: { weight } highlight non-zero target%, { readonly } output-only (value
+// only, no formula, not editable), { plain } compact (category title / %).
+function invCellHtml(sheetRow, col, cell, opts) {
   cell = cell || { display: '', formula: '', raw: '' };
+  opts = opts || {};
+  if (opts.readonly) {
+    return '<div class="cell cell-ro" title="Output only — formula auto-filled">' +
+           '<div class="display-text">' + escapeHtml(cell.display) + '</div></div>';
+  }
   var isF = cell.formula && String(cell.formula).charAt(0) === '=';
+  var nz = opts.weight && cell.raw !== '' && cell.raw != null && !isNaN(Number(cell.raw)) && Number(cell.raw) !== 0;
+  var cls = 'cell' + (isF ? ' is-formula' : '') + (nz ? ' wt-nonzero' : '') + (opts.plain ? ' cell-plain' : '');
   var inner = (isF ? '<div class="formula-text">' + escapeHtml(cell.formula) + '</div>' : '') +
               '<div class="display-text">' + escapeHtml(cell.display) + '</div>';
-  return '<div class="cell' + (isF ? ' is-formula' : '') + '" data-cell="' + sheetRow + ':' + col + '" tabindex="0">' + inner + '</div>';
+  return '<div class="' + cls + '" data-cell="' + sheetRow + ':' + col + '" tabindex="0">' + inner + '</div>';
 }
-function invWireEditor(investor) {
-  var host = document.getElementById('inv-editor-' + investor);
-  host.querySelectorAll('.cell').forEach(function (cellEl) {
-    cellEl.addEventListener('click', function () { invBeginEdit(investor, cellEl); });
+
+// Look up a cell's {display, formula, raw} from the grouped editor model.
+function invFindCell(investor, sheetRow, col) {
+  var ed = INV[investor].editor;
+  if (ed.base && ed.base.sheetRow === sheetRow && ed.base.col === col) return ed.base;
+  var found = { display: '', formula: '', raw: '' };
+  ed.categories.forEach(function (cat) {
+    if (cat.headerRow === sheetRow && col === ed.nameCol) found = { display: cat.name, formula: '', raw: cat.name };
+    if (cat.headerRow === sheetRow && col === ed.catPctCol && cat.catPct) found = cat.catPct;
+    cat.rows.forEach(function (row) { if (row.sheetRow === sheetRow && row.cells[col]) found = row.cells[col]; });
   });
-  host.querySelectorAll('[data-del]').forEach(function (btn) {
-    btn.addEventListener('click', function () { invDeleteRow(investor, Number(btn.getAttribute('data-del'))); });
-  });
-  invWireDrag(investor, host);
+  return found;
 }
+
 function invBeginEdit(investor, cellEl) {
   if (cellEl.querySelector('input')) return;
-  var key = cellEl.getAttribute('data-cell'), parts = key.split(':');
+  var parts = cellEl.getAttribute('data-cell').split(':');
   var sheetRow = Number(parts[0]), col = parts[1];
-  var row = (INV[investor].editor.rows.filter(function (r) { return r.sheetRow === sheetRow; })[0]) || { cells: {} };
-  var cell = row.cells[col] || { formula: '', raw: '', display: '' };
+  var cell = invFindCell(investor, sheetRow, col);
   var prefill = (cell.formula && String(cell.formula).charAt(0) === '=') ? cell.formula
               : (cell.raw === null || cell.raw === undefined ? '' : String(cell.raw));
   cellEl.classList.add('editing');
@@ -296,7 +331,6 @@ function invBeginEdit(investor, cellEl) {
   var done = false;
   var commit = function (save) {
     if (done) return; done = true;
-    cellEl.classList.remove('editing');
     if (save) invWriteCell(investor, sheetRow, col, input.value);
     else invRenderEditor(investor);
   };
@@ -306,71 +340,45 @@ function invBeginEdit(investor, cellEl) {
     else if (ev.key === 'Escape') { ev.preventDefault(); commit(false); }
   });
 }
+
+// After any write, reload editor + charts so computed cells (H, B/C, returns)
+// and the diagram reflect the new formula results.
 function invWriteCell(investor, sheetRow, col, newText) {
   google.script.run
-    .withSuccessHandler(function (resp) {
-      var st = INV[investor]; st.hash = resp.hash;
-      var row = st.editor.rows.filter(function (r) { return r.sheetRow === sheetRow; })[0];
-      if (row) row.cells[col] = { display: resp.cell.display, formula: resp.cell.formula, raw: resp.cell.raw };
-      invRenderEditor(investor);
-      invReloadModel(investor); // charts depend on the edited cell
-    })
+    .withSuccessHandler(function () { invReload(investor); })
     .withFailureHandler(function (e) { toast('Save failed: ' + (e && e.message ? e.message : e)); invRenderEditor(investor); })
     .writeInvestmentCell({ investor: investor, sheetRow: sheetRow, col: col, newText: newText });
 }
-function invAddRow(investor) {
-  google.script.run
-    .withSuccessHandler(function (resp) {
-      var st = INV[investor]; st.hash = resp.hash;
-      st.editor.rows.push(resp.row);
-      invRenderEditor(investor);
-    })
-    .withFailureHandler(function (e) { toast('Add row failed: ' + (e && e.message ? e.message : e)); })
-    .appendInvestmentRow(investor);
+
+// One-time warning that inserting a row shifts both investors' shared columns.
+function invWarnRowShift() {
+  if (INV_REORDER_WARNED) return true;
+  var ok = window.confirm('Adding a stock inserts a spreadsheet row, which shifts BOTH investors\' columns together (rows are shared). Continue?');
+  if (ok) { INV_REORDER_WARNED = true; google.script.run.setReorderAck(); }
+  return ok;
 }
-function invDeleteRow(investor, sheetRow) {
+function invAddStock(investor, headerRow) {
+  if (!invWarnRowShift()) return;
   google.script.run
-    .withSuccessHandler(function (resp) {
-      var st = INV[investor]; st.hash = resp.hash;
-      st.editor.rows = st.editor.rows.filter(function (r) { return r.sheetRow !== sheetRow; });
-      invRenderEditor(investor);
-      invReloadModel(investor);
-    })
-    .withFailureHandler(function (e) { toast('Clear row failed: ' + (e && e.message ? e.message : e)); })
+    .withSuccessHandler(function (ed) { var st = INV[investor]; st.editor = ed; st.hash = ed.hash; invRenderEditor(investor); invReloadModel(investor); })
+    .withFailureHandler(function (e) { toast('Add stock failed: ' + (e && e.message ? e.message : e)); })
+    .addInvestmentStock(investor, headerRow);
+}
+function invAddCategory(investor) {
+  var name = window.prompt('Name for the new broad category:', 'New Category');
+  if (name === null) return;
+  name = name.trim();
+  if (!name) { toast('A name is required.'); return; }
+  google.script.run
+    .withSuccessHandler(function (ed) { var st = INV[investor]; st.editor = ed; st.hash = ed.hash; invRenderEditor(investor); })
+    .withFailureHandler(function (e) { toast('Add category failed: ' + (e && e.message ? e.message : e)); })
+    .addInvestmentCategory(investor, name);
+}
+function invClearRow(investor, sheetRow) {
+  google.script.run
+    .withSuccessHandler(function () { invReload(investor); })
+    .withFailureHandler(function (e) { toast('Clear failed: ' + (e && e.message ? e.message : e)); })
     .clearInvestmentRow({ investor: investor, sheetRow: sheetRow });
-}
-var invDragRow = null;
-function invWireDrag(investor, host) {
-  host.querySelectorAll('.inv-row-grid').forEach(function (rowEl) {
-    rowEl.addEventListener('dragstart', function () { invDragRow = Number(rowEl.getAttribute('data-row')); rowEl.classList.add('is-dragging'); });
-    rowEl.addEventListener('dragend', function () { rowEl.classList.remove('is-dragging'); host.querySelectorAll('.inv-row-grid').forEach(function (r) { r.classList.remove('drag-over-above', 'drag-over-below'); }); });
-    rowEl.addEventListener('dragover', function (ev) {
-      ev.preventDefault();
-      var tgt = Number(rowEl.getAttribute('data-row'));
-      rowEl.classList.toggle('drag-over-above', invDragRow > tgt);
-      rowEl.classList.toggle('drag-over-below', invDragRow < tgt);
-    });
-    rowEl.addEventListener('dragleave', function () { rowEl.classList.remove('drag-over-above', 'drag-over-below'); });
-    rowEl.addEventListener('drop', function (ev) {
-      ev.preventDefault();
-      var toRow = Number(rowEl.getAttribute('data-row'));
-      if (invDragRow && invDragRow !== toRow) invMoveRow(investor, invDragRow, toRow);
-      invDragRow = null;
-    });
-  });
-}
-function invMoveRow(investor, fromRow, toRow) {
-  if (!INV_REORDER_WARNED) {
-    INV_REORDER_WARNED = true;
-    if (!window.confirm('Reordering moves the entire spreadsheet row, so BOTH investors\' columns move together. Continue?')) {
-      return;
-    }
-    google.script.run.setReorderAck();
-  }
-  google.script.run
-    .withSuccessHandler(function (resp) { INV[investor].hash = resp.hash; invReload(investor); })
-    .withFailureHandler(function (e) { toast('Reorder failed: ' + (e && e.message ? e.message : e)); })
-    .moveInvestmentRow(investor, fromRow, toRow);
 }
 
 // ---------- export per chart ----------
@@ -401,9 +409,7 @@ function invPageHtml(investor) {
     '<details class="panel"><summary>Chart settings</summary>' +
       '<div class="panel-body" id="inv-settings-' + investor + '"></div></details>' +
     '<details class="panel"><summary>' + investor + ' data editor</summary>' +
-      '<div class="panel-body"><div id="inv-editor-' + investor + '"><div class="chart-empty">Loading…</div></div>' +
-        '<div style="margin-top:10px;"><button class="btn ghost sm" data-addrow="' + investor + '">+ Add row</button></div>' +
-      '</div></details>';
+      '<div class="panel-body"><div id="inv-editor-' + investor + '"><div class="chart-empty">Loading…</div></div></div></details>';
 }
 function invBuildPage(investor) {
   var page = document.getElementById('page-' + investor.toLowerCase());
@@ -414,7 +420,17 @@ function invBuildPage(investor) {
       var p = btn.getAttribute('data-x').split('|'); invExport(p[0], p[1], p[2]);
     });
   });
-  page.querySelector('[data-addrow]').addEventListener('click', function () { invAddRow(investor); });
+  // Delegated editor handler (the editor DOM is rebuilt on every change, so a
+  // single listener on the persistent host covers cells, add/clear, add-cat).
+  // preventDefault stops clicks inside a <summary> from toggling the panel.
+  var edHost = document.getElementById('inv-editor-' + investor);
+  edHost.addEventListener('click', function (ev) {
+    var cell = ev.target.closest('.cell:not(.cell-ro)');
+    if (cell && edHost.contains(cell)) { ev.preventDefault(); invBeginEdit(investor, cell); return; }
+    var as = ev.target.closest('[data-addstock]'); if (as) { ev.preventDefault(); invAddStock(investor, Number(as.getAttribute('data-addstock'))); return; }
+    var cl = ev.target.closest('[data-clear]');    if (cl) { ev.preventDefault(); invClearRow(investor, Number(cl.getAttribute('data-clear'))); return; }
+    var ac = ev.target.closest('[data-addcat]');   if (ac) { ev.preventDefault(); invAddCategory(investor); return; }
+  });
   INV[investor].built = true;
 }
 function invLoad(investor) {
