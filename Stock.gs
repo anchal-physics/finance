@@ -8,9 +8,18 @@
  *                           quantities, amounts, closingPrices)
  *
  * Given a Robinhood-style transaction log (one row per transaction),
- * returns a 2D array with one row per currently-held ticker:
+ * returns a 2D array whose FIRST row is a header and each subsequent row
+ * is one currently-held ticker:
+ *   ['Ticker','Total Shares','LT Shares','ST Shares',
+ *    'LT Avg Cost/Share','ST Avg Cost/Share']
  *   [ticker, totalShares, longTermShares, shortTermShares,
  *    longTermAvgCostPerShare, shortTermAvgCostPerShare]
+ *   …
+ *
+ * NOTE: because of the header row the spilled data now starts on the
+ * SECOND row. Any downstream formulas anchored to the spill (e.g. the
+ * Total Cost / Price / Total Current Value columns) must be shifted down
+ * one row to stay aligned.
  *
  * Lot accounting: FIFO. A lot is long-term if today is more than
  * one calendar year after the activity date (IRS holding-period rule:
@@ -20,12 +29,21 @@
  *   1. If Amount column has a non-zero dollar value, use |Amount| as
  *      that lot's total cost.
  *   2. Otherwise, fall back to Quantity * Closing Price (useful for
- *      DRIP, transfers, splits where Amount may be missing).
+ *      DRIP, transfers where Amount may be missing).
  *
- * Quantity sign convention: positive = added shares (buy / DRIP /
- * transfer in / split), negative = removed shares (sell / transfer
- * out). Trans Code is recorded but not currently used for routing —
- * the sign of Quantity is the source of truth.
+ * Trans Code "SPL" = a stock split. Its Quantity is the NEW TOTAL number
+ * of shares held after the split (not a delta). We scale every existing
+ * lot by ratio = newTotal / currentTotal, dividing each lot's per-share
+ * cost by the same ratio — this preserves total cost basis and each lot's
+ * acquisition date (splits don't affect the holding period), and makes the
+ * post-split share count exact.
+ *
+ * Direction of a share-moving row comes from the Trans Code, NOT the sign of
+ * Quantity — this Robinhood export lists Quantity UNSIGNED (both Buy and Sell
+ * rows are positive). "Buy" and "ACATI" (transfer in) add shares; "Sell"
+ * removes them (FIFO); any other share-moving code falls back to the sign of
+ * Amount (positive Amount = cash in = a disposal). Zero-quantity rows (CDIV,
+ * ACH, DCF, SLIP, …) are ignored.
  *
  * Tickers with zero remaining shares (fully sold off) are omitted.
  * ----------------------------------------------------------------------
@@ -97,16 +115,40 @@ function GET_ALL_STOCK_SUMMARIES(activityDates, instruments, transCodes, quantit
 
     for (var ji = 0; ji < transactions.length; ji++) {
       var tx = transactions[ji];
-      if (tx.quantity > 0) {
-        // Buy / add: cost basis preference = |Amount|, else qty * closingPrice
+      if (tx.code && tx.code.toUpperCase() === 'SPL') {
+        // Stock split: tx.quantity is the NEW TOTAL shares after the split.
+        // Scale each lot so the totals match; divide per-share cost by the
+        // same ratio to preserve total cost basis. Dates are untouched (a
+        // split does not restart the holding period).
+        var curTotal = 0;
+        for (var si = 0; si < lots.length; si++) curTotal += lots[si].qty;
+        if (curTotal > 1e-9 && tx.quantity > 0) {
+          var ratio = tx.quantity / curTotal;
+          for (var sj = 0; sj < lots.length; sj++) {
+            lots[sj].qty *= ratio;
+            lots[sj].costPerShare /= ratio;
+          }
+        }
+        continue;
+      }
+      // Quantity is UNSIGNED in this export — use magnitude and route by code.
+      var mag = Math.abs(tx.quantity);
+      if (mag <= 1e-12) continue;
+      var code = tx.code ? tx.code.toUpperCase() : '';
+      var isSell;
+      if (code === 'SELL') isSell = true;
+      else if (code === 'BUY' || code === 'ACATI') isSell = false;
+      else isSell = (tx.amount > 0); // fallback: positive cash = a disposal
+
+      if (!isSell) {
+        // Buy / transfer in: cost basis = |Amount|, else magnitude * closingPrice
         var totalCost = Math.abs(tx.amount) > 0
           ? Math.abs(tx.amount)
-          : (tx.quantity * (tx.closingPrice || 0));
-        var costPerShare = tx.quantity > 0 ? (totalCost / tx.quantity) : 0;
-        lots.push({ date: tx.date, qty: tx.quantity, costPerShare: costPerShare });
-      } else if (tx.quantity < 0) {
-        // Sell / remove: FIFO drawdown
-        var remaining = -tx.quantity;
+          : (mag * (tx.closingPrice || 0));
+        lots.push({ date: tx.date, qty: mag, costPerShare: totalCost / mag });
+      } else {
+        // Sell / transfer out: FIFO drawdown
+        var remaining = mag;
         while (remaining > 1e-9 && lots.length > 0) {
           if (lots[0].qty <= remaining + 1e-9) {
             remaining -= lots[0].qty;
@@ -147,10 +189,14 @@ function GET_ALL_STOCK_SUMMARIES(activityDates, instruments, transCodes, quantit
     ]);
   }
 
-  // Apps Script requires custom functions return a 2D array. If output is
-  // empty, return a single-row placeholder so the cell doesn't show an error.
-  if (output.length === 0) return [['', 0, 0, 0, 0, 0]];
-  return output;
+  // Prepend a header row so downstream columns can be referenced by name.
+  var header = ['Ticker', 'Total Shares', 'LT Shares', 'ST Shares',
+                'LT Avg Cost/Share', 'ST Avg Cost/Share'];
+
+  // Apps Script requires custom functions return a 2D array. If there are no
+  // holdings, still return the header plus a blank placeholder row.
+  if (output.length === 0) return [header, ['', 0, 0, 0, 0, 0]];
+  return [header].concat(output);
 }
 
 

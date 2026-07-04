@@ -254,14 +254,29 @@ Robinhood transaction history.
   J=(blank), K=Closing Price
 - Cell **N1** contains:
   `=GET_ALL_STOCK_SUMMARIES($C$2:C1000, $D$2:$D1000, $F$2:$F1000, $G$2:$G1000, $I$2:I1000, $K$2:$K1000)`
-  which spills a 6-column array into N:S — one row per currently-held
-  ticker, columns: ticker / total shares / LT shares / ST shares /
-  LT avg cost per share / ST avg cost per share.
+  which spills a 6-column array into N:S. **Row 1 of the spill is a HEADER**
+  (`Ticker / Total Shares / LT Shares / ST Shares / LT Avg Cost/Share /
+  ST Avg Cost/Share`); data starts on the second spilled row, one row per
+  currently-held ticker.
 - Cols T–V (Total Cost, Price via `GOOGLEFINANCE`, Total Current Value)
-  are pre-filled formulas anchored to the spilled rows.
+  are pre-filled formulas anchored to the spilled rows. ⚠️ Because the header
+  row was added, these must be shifted DOWN one row to stay aligned with the
+  data (the header pushed every data row down by one).
 
-Sign convention: positive Quantity = adds shares, negative = removes.
+**Quantity is UNSIGNED** in this export — both Buy and Sell rows are positive.
+Direction comes from **Trans Code**, not the sign: `Buy`/`ACATI` (transfer in)
+add shares, `Sell` removes them (FIFO); any other share-moving code falls back
+to the sign of Amount (positive Amount = cash in = disposal). Zero-quantity
+rows (`CDIV`, `ACH`, `DCF`, `SLIP`) are ignored. (⚠️ This corrects an earlier
+wrong assumption — "positive = add, negative = remove" — that treated every
+`Sell` as a buy; it only surfaced on a fully-sold ticker like NVDA. Regression
+check: a ticker bought-then-fully-sold must be ABSENT from the output.)
 Cost basis preference: `|Amount|` if non-zero, else `Quantity * Closing Price`.
+**Stock splits (`Trans Code = SPL`)**: the SPL row's Quantity is the NEW TOTAL
+shares after the split (not a delta — verified: VUG 17.39→86.93 = 5:1, SCHB
+20.97→41.93 = 2:1). `Stock.gs` scales every existing lot by
+`newTotal/currentTotal`, dividing per-share cost by the same ratio, so total
+cost basis and each lot's acquisition date (holding period) are preserved.
 
 ### Sheet: Investment
 
