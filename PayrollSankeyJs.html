@@ -832,6 +832,10 @@ function refreshFromServer() {
     invReload(ACTIVE_PAGE === 'anchal' ? 'Anchal' : 'Anamika');
     return;
   }
+  if (ACTIVE_PAGE.indexOf('pf-') === 0 && typeof portfolioReload === 'function') {
+    portfolioReload(ACTIVE_PAGE.slice(3));
+    return;
+  }
   google.script.run
     .withSuccessHandler(function (resp) {
       STATE.subpanels = resp.subpanels;

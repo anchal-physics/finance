@@ -469,19 +469,18 @@ function invLoadSettings(investor, cb) {
     .getNamedSettings('inv:' + investor);
 }
 
-// ---------- tab navigation ----------
+// ---------- tab navigation (generic; PortfolioJs adds pages at runtime) ----------
+// Page id convention: '#page-<data-page>'. Titles map keyed by data-page;
+// portfolio tabs add their own entries via PAGE_TITLES (a global).
+var PAGE_TITLES = { sankey: '· Payroll Sankey', anchal: '· Anchal Investment Strategy', anamika: '· Anamika Investment Strategy' };
 function invActivatePage(page) {
   ACTIVE_PAGE = page;
-  ['sankey', 'anchal', 'anamika'].forEach(function (p) {
-    var el = document.getElementById('page-' + p);
-    if (el) el.classList.toggle('active', p === page);
-  });
+  document.querySelectorAll('.page').forEach(function (el) { el.classList.toggle('active', el.id === 'page-' + page); });
   document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t.getAttribute('data-page') === page); });
   document.getElementById('tabs').classList.remove('open');
   document.getElementById('hamburger').setAttribute('aria-expanded', 'false');
   document.getElementById('sankey-export').style.display = (page === 'sankey') ? 'inline-flex' : 'none';
-  var titles = { sankey: '· Payroll Sankey', anchal: '· Anchal Investment Strategy', anamika: '· Anamika Investment Strategy' };
-  document.getElementById('page-title').textContent = titles[page] || '· Payroll Sankey';
+  document.getElementById('page-title').textContent = PAGE_TITLES[page] || '';
 
   if (page === 'anchal' || page === 'anamika') {
     var investor = page === 'anchal' ? 'Anchal' : 'Anamika';
@@ -490,10 +489,14 @@ function invActivatePage(page) {
       if (!st.settings) { invLoadSettings(investor, function () { invBuildPage(investor); invLoad(investor); }); }
       else { invBuildPage(investor); invLoad(investor); }
     }
+  } else if (page.indexOf('pf-') === 0 && typeof portfolioActivate === 'function') {
+    portfolioActivate(page.slice(3));
   }
 }
-document.querySelectorAll('.tab').forEach(function (t) {
-  t.addEventListener('click', function () { invActivatePage(t.getAttribute('data-page')); });
+// Delegated so dynamically-added portfolio tabs work too.
+document.getElementById('tabs').addEventListener('click', function (ev) {
+  var t = ev.target.closest('.tab');
+  if (t) invActivatePage(t.getAttribute('data-page'));
 });
 document.getElementById('hamburger').addEventListener('click', function () {
   var tabs = document.getElementById('tabs'), open = tabs.classList.toggle('open');

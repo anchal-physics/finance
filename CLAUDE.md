@@ -57,14 +57,16 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 | ~~`Sankey.gs`~~ | **Deleted** (in git history at/before this point). Legacy copy/paste-to-sankeydiagram.net converter, superseded by `SankeyRenderer.gs`. Removed from `.clasp.json` `filePushOrder` too. | gone |
 | `Webapp.gs` | **Thin top-level combiner only**: `doGet` (routing), `include()`, and cross-feature server code shared by all tabs — print-to-PDF handoff (`storePrintSvg`/`servePrintPage_`), generic named settings (`getNamedSettings`/`saveNamedSettings`), reorder ack, and shared helpers (`setCellSmart_`, `moveRowOnSheet_`, `safeGetUserEmail_`). No feature logic. Add a feature ⇒ add a new `<Feature>.gs`; Webapp only routes. ~150 lines. | yes |
 | `PayrollSankey.gs` | Server for the PayrollSankey landing tab: bootstrap payload, snapshot/polling, cell writes, row add/delete/move (`moveSheetRow`), settings + subpanel locks, `getEffectiveRange_`, `addNewLevel`. | yes |
+| `Portfolio.gs` | Server for the portfolio-stats tabs. Config-driven `PORTFOLIOS_` (key → sheet name → label); `getPortfolioList()` + `getPortfolioStats(key)` read the computed summary columns (N:AF) of a `Portfolio_*` sheet. Add an investor = one `PORTFOLIOS_` entry. | yes |
 | `Investment.gs` | Server for the Anchal/Anamika tabs: `computeInvestmentModel_`, `getInvestmentData`, editor endpoints (`getInvestmentEditor`, `writeInvestmentCell`, `addInvestmentStock`/`addInvestmentCategory`, `clearInvestmentRow`, `pollInvestment`), read-only/auto-fill column config, + investment-only helpers. | yes |
 | `WebappPage.html` | **Shell only** — `<head>`, topbar, tab nav, page containers, and the one `<script>` IIFE that stitches the client modules via `<?!= include('…') ?>`. The actual code lives in the partials below. | yes |
 | `Styles.html` | All CSS (the `<style>` block), included into `<head>`. | yes |
 | `PayrollSankeyPage.html` | Static markup for the PayrollSankey landing page's 3 panels. | yes |
 | `CoreJs.html` | Shared client JS: bootstrap/state/constants, `PALETTES`, `escapeHtml`, `toast`, `serializeSvg`, `exportSvgStringToPng/Pdf`. | yes |
 | `PayrollSankeyJs.html` | PayrollSankey client JS: parser, renderer, subpanel editor, persistence, drag, polling, Sankey export. | yes |
-| `InvestmentJs.html` | Investment client JS: pie/bar SVG builders, legend, settings, editor, tab nav, per-chart export, polling. | yes |
-| `InitJs.html` | Initial-wiring block; **must be included last** (applies settings, first render, starts polling). | yes |
+| `InvestmentJs.html` | Investment client JS: pie/bar SVG builders, legend, settings, editor, tab nav (generic — `PAGE_TITLES` + delegated `#tabs` handler), per-chart export, polling. | yes |
+| `PortfolioJs.html` | Portfolio-stats client JS: pie (holdings by value) + stats box, return-% bars with trailing-change line-style markers, dual-axis LT $/% bars. `pfInit()` builds tabs/pages from `getPortfolioList()`. | yes |
+| `InitJs.html` | Initial-wiring block; **must be included last** (applies settings, first render, starts polling, `pfInit()`). | yes |
 | `PrintPage.html` | Print-to-PDF view — receives an SVG token, embeds the SVG full-page with `@media print` CSS, auto-opens the print dialog. | yes |
 
 > **Client is split across `.html` partials stitched by `include()`.** Apps
@@ -104,7 +106,7 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 > ```bash
 > python3 - <<'EOF'
 > import re
-> inc={n:open(n+'.html').read() for n in ['Styles','PayrollSankeyPage','CoreJs','PayrollSankeyJs','InvestmentJs','InitJs']}
+> inc={n:open(n+'.html').read() for n in ['Styles','PayrollSankeyPage','CoreJs','PayrollSankeyJs','InvestmentJs','PortfolioJs','InitJs']}
 > page=open('WebappPage.html').read()
 > page=re.sub(r"<\?!= include\('([^']+)'\) \?>", lambda m: inc[m.group(1)], page)
 > page=page.replace("<?!= bootstrap ?>","null")
@@ -277,6 +279,20 @@ shares after the split (not a delta — verified: VUG 17.39→86.93 = 5:1, SCHB
 20.97→41.93 = 2:1). `Stock.gs` scales every existing lot by
 `newTotal/currentTotal`, dividing per-share cost by the same ratio, so total
 cost basis and each lot's acquisition date (holding period) are preserved.
+
+**Portfolio-stats page** (`Portfolio.gs` + `PortfolioJs.html`, tab "Anchal
+Portfolio"). Reads the computed columns to the right of the spill:
+`N` ticker · `T` cost · `U` price · `V` current value · `Y` LT profit $ ·
+`Z` LT profit % (fraction) · `AB`–`AF` trailing % changes (1w/4w/12w/6m/1y).
+Three panels: (1) pie of holdings by `V` + a stats box (total value / $ profit /
+% profit); (2) return-% bars (`(V−T)/T`) per holding with **trailing-change
+markers** drawn as distinct line styles — 1w dotted, 4w dashed, 12w
+double-dashed, 6m solid, 1y double-solid (one neutral color, legend at top, no
+in-place labels); (3) LT capital-gain profit as dual-axis bars ($ left, % right;
+excludes 0/empty). **Each stock keeps a stable color** (value-sorted index into
+the `nested` palette) across all three panels. Config-driven: add
+`Portfolio_AA` for Anamika by adding one `PORTFOLIOS_` entry — the client builds
+the tab + page from `getPortfolioList()`.
 
 ### Sheet: Investment
 
