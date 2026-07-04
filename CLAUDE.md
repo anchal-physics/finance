@@ -182,6 +182,20 @@ is in **denylist mode** — anything not explicitly ignored gets pushed.
     `executeAs: User accessing the web app`, `access: Anyone with Google account`.
   - Subsequent updates: **Deploy → Manage deployments → ✏ (pencil) →
     Version: New version**. Re-Deploy. The URL stays the same.
+  - **Data freshness — run `installFreshnessTrigger` once** (Apps Script editor
+    → Run). It creates **twice-daily** time-driven triggers (`scheduledRefresh_`
+    → `forceRecalc_`) at the hours in `FRESHNESS_HOURS_` (default `[6, 17]`
+    project time — morning + after US market close) to keep
+    `GOOGLEFINANCE`/`TODAY()`/custom-function values fresh in the background,
+    since opening the web app does NOT recalc the sheet and `getValues()` reads
+    last-computed values. Twice-daily (not every-N-min) is deliberate: the
+    summaries key off daily closing prices, so frequent runs would just burn the
+    consumer trigger-runtime quota. `forceRecalc_` re-sets each formula cell
+    containing `GOOGLEFINANCE` / `GET_ALL_STOCK_SUMMARIES` to itself (safe —
+    literals untouched). The topbar **↻ Recalc** button calls `refreshData()`
+    (force recalc + 2.5 s wait, then reload the active page) for on-demand
+    refresh. `removeFreshnessTrigger` stops it. (`script.scriptapp` scope is
+    already in `appsscript.json`.)
 
 - **Sharing the webapp with someone**: share the Finance spreadsheet
   with their Google account (Editor access). The webapp URL itself is

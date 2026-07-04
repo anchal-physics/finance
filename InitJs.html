@@ -49,4 +49,7 @@ invStartPolling();
 
 // Build portfolio tabs/pages from server config
 pfInit();
+
+// Recalc (force GOOGLEFINANCE + summaries, then reload active page)
+document.getElementById('recalc-btn').addEventListener('click', forceRecalcData);
 </script>

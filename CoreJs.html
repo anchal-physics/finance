@@ -115,4 +115,24 @@ function toast(msg) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3200);
 }
+
+// Force a live recalculation (GOOGLEFINANCE + summary custom function) on the
+// sheet, then re-read the active page. refreshFromServer is defined later
+// (global) and dispatches per active tab.
+function forceRecalcData() {
+  var btn = document.getElementById('recalc-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '↻ …'; }
+  toast('Recalculating — fetching live prices…');
+  google.script.run
+    .withSuccessHandler(function (resp) {
+      if (btn) { btn.disabled = false; btn.textContent = '↻ Recalc'; }
+      toast('Data recalculated' + (resp && resp.touched != null ? ' (' + resp.touched + ' cells)' : '') + '.');
+      if (typeof refreshFromServer === 'function') refreshFromServer();
+    })
+    .withFailureHandler(function (e) {
+      if (btn) { btn.disabled = false; btn.textContent = '↻ Recalc'; }
+      toast('Recalc failed: ' + (e && e.message ? e.message : e));
+    })
+    .refreshData();
+}
 </script>

@@ -141,6 +141,96 @@ function servePrintPage_(token) {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
+// =====================  Data freshness (GOOGLEFINANCE / TODAY / custom fns)  =====================
+//
+// getValues() reads the LAST-COMPUTED cell values; opening the web app does NOT
+// recalculate the sheet, and flush() doesn't recompute GOOGLEFINANCE / TODAY() /
+// custom functions. So we (a) run a time-driven trigger a couple of times a day
+// to keep the sheet fresh in the background, and (b) expose refreshData() for the
+// topbar "Recalc" button to force it on demand.
+//
+// Twice-daily (not every N minutes) is deliberate: the summaries key off daily
+// CLOSING prices, so more frequent runs just burn the consumer trigger-runtime
+// quota. FRESHNESS_HOURS_ are in the project timezone (America/Los_Angeles):
+// ~6am (date rollover / overnight) and ~5pm (after the US market close).
+//
+// forceRecalc_ re-sets each formula cell that calls GOOGLEFINANCE or
+// GET_ALL_STOCK_SUMMARIES to itself — re-setting a formula marks the cell dirty
+// so Sheets re-evaluates it (GOOGLEFINANCE refetches; the custom function re-runs
+// with a current date). Only formula cells are touched, so literals are safe.
+
+var FRESHNESS_TRIGGER_FN_ = 'scheduledRefresh_';
+var FRESHNESS_KEYWORDS_ = ['GOOGLEFINANCE', 'GET_ALL_STOCK_SUMMARIES'];
+var FRESHNESS_HOURS_ = [6, 17]; // project-timezone hours to refresh (after close + morning)
+
+/** Sheets that hold volatile/external formulas worth refreshing. */
+function refreshSheetsList_() {
+  var names = [];
+  try { Object.keys(PORTFOLIOS_).forEach(function (k) { names.push(PORTFOLIOS_[k].sheetName); }); } catch (e) {}
+  try { if (INVESTMENT_SHEET_NAME) names.push(INVESTMENT_SHEET_NAME); } catch (e) {}
+  // de-dup
+  return names.filter(function (n, i) { return names.indexOf(n) === i; });
+}
+
+/** Re-evaluate every GOOGLEFINANCE / custom-function cell. Returns #cells touched. */
+function forceRecalc_() {
+  var ss = SpreadsheetApp.getActive();
+  var touched = 0;
+  refreshSheetsList_().forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) return;
+    var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+    if (lastRow < 1 || lastCol < 1) return;
+    var formulas = sh.getRange(1, 1, lastRow, lastCol).getFormulas();
+    for (var r = 0; r < formulas.length; r++) {
+      for (var c = 0; c < formulas[r].length; c++) {
+        var f = formulas[r][c];
+        if (!f) continue;
+        for (var k = 0; k < FRESHNESS_KEYWORDS_.length; k++) {
+          if (f.indexOf(FRESHNESS_KEYWORDS_[k]) >= 0) { sh.getRange(r + 1, c + 1).setFormula(f); touched++; break; }
+        }
+      }
+    }
+  });
+  SpreadsheetApp.flush();
+  return touched;
+}
+
+/** Client-callable: force recalc, wait briefly for external fetches, report. */
+function refreshData() {
+  var touched = forceRecalc_();
+  Utilities.sleep(2500); // give GOOGLEFINANCE a moment to populate before the client re-reads
+  return { ok: true, touched: touched };
+}
+
+/** Time-driven trigger target (background freshness). */
+function scheduledRefresh_() {
+  forceRecalc_();
+}
+
+/**
+ * Run ONCE from the Apps Script editor (Run ▸ installFreshnessTrigger) to keep
+ * the sheet fresh a couple of times a day without anyone opening it. Idempotent
+ * — removes any existing copies first. Edit FRESHNESS_HOURS_ to change the times.
+ */
+function installFreshnessTrigger() {
+  removeFreshnessTrigger();
+  FRESHNESS_HOURS_.forEach(function (h) {
+    ScriptApp.newTrigger(FRESHNESS_TRIGGER_FN_).timeBased().atHour(h).everyDays(1).create();
+  });
+  return 'Installed daily freshness trigger(s) at hours: ' + FRESHNESS_HOURS_.join(', ') + ' (project timezone).';
+}
+
+/** Remove the freshness trigger (run from the editor if you want to stop it). */
+function removeFreshnessTrigger() {
+  var removed = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === FRESHNESS_TRIGGER_FN_) { ScriptApp.deleteTrigger(t); removed++; }
+  });
+  return 'Removed ' + removed + ' trigger(s).';
+}
+
+
 // =====================  Small helpers  =====================
 
 function safeGetUserEmail_() {
