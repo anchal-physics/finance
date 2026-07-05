@@ -128,6 +128,7 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 | `Finance.xlsx` | Local snapshot of the workbook (gitignored). May or may not be present. **Never commit.** | gitignored |
 | `logo/*.png` | Brand logo source art (Capuchin monkey in a dark-green circle). `Logo_Candidate_3.png` is the current source; `capuchin_emblem.png` is the cropped 96px emblem. Source only — clasp doesn't push PNGs (`.claspignore` excludes `logo/**`). | yes |
 | `make_emblem.sh` | Regenerates the round emblem from the source art (fixed crop) and optionally re-embeds it into `Styles.html` (`--embed`). | yes |
+| `deploy.sh` | `clasp push` + publish a new version to the existing web-app deployment (`clasp deploy -i <id>`), so the `/exec` URL updates in place. Run `./deploy.sh "msg"`. | yes |
 
 > **Branding — "Capuchin".** The app is branded *Capuchin* (a personal-finance
 > manager). The brand name + a round logo emblem show in the topbar on every
@@ -164,6 +165,15 @@ clasp push --force
 
 `--force` skips the "overwrite appsscript.json?" prompt. `.claspignore`
 is in **denylist mode** — anything not explicitly ignored gets pushed.
+
+**`clasp push` only updates HEAD (the `/dev` test URL).** The `/exec` URL you
+bookmark/share is pinned to a deployment **version** and won't reflect changes
+until you publish a new version. To do that from the terminal (same URL, no
+editor clicks): **`./deploy.sh "what changed"`** — it pushes, then runs
+`clasp deploy -i <deploymentId>` against the existing web-app deployment (found
+via `clasp deployments`; the `@<number>` entry, not `@HEAD`). Plain `clasp
+deploy` with no `-i` mints a *new* deployment (new URL) — avoid. Mobile browsers
+cache the HTML, so hard-refresh the phone after deploying.
 
 ### Critical safety guardrails (we learned these the hard way)
 

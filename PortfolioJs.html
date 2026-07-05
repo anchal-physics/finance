@@ -57,74 +57,90 @@ function pfXLabel(cx, yBase, ticker) {
          escapeHtml(ticker) + '</text>';
 }
 
-// ---------- Trailing-change markers (distinct LINE STYLES, one neutral color) ----------
-// Progression short→long: dotted · dashed · double-dashed · solid · double-solid.
+// ---------- Trailing-change markers (distinct single-line styles, one color) ----------
+// Progression short→long: dotted · dashed · dash-dot · long-dash · solid (1y).
 var PF_PERIODS = [
   { key: 'w1',  label: '1w',  style: 'dot' },
   { key: 'w4',  label: '4w',  style: 'dash' },
-  { key: 'w12', label: '12w', style: 'ddash' },
-  { key: 'm6',  label: '6m',  style: 'solid' },
-  { key: 'y1',  label: '1y',  style: 'dsolid' }
+  { key: 'w12', label: '12w', style: 'dashdot' },
+  { key: 'm6',  label: '6m',  style: 'longdash' },
+  { key: 'y1',  label: '1y',  style: 'solid' }
 ];
-function pfMarkerLines(style) {
-  if (style === 'dot')    return [{ dy: 0, dash: '1.5,2.5' }];
-  if (style === 'dash')   return [{ dy: 0, dash: '5,3' }];
-  if (style === 'ddash')  return [{ dy: -1.5, dash: '5,3' }, { dy: 1.5, dash: '5,3' }];
-  if (style === 'solid')  return [{ dy: 0, dash: '' }];
-  if (style === 'dsolid') return [{ dy: -1.5, dash: '' }, { dy: 1.5, dash: '' }];
-  return [{ dy: 0, dash: '' }];
+function pfMarkerDash(style) {
+  if (style === 'dot')      return '1.5,3';
+  if (style === 'dash')     return '5,3';
+  if (style === 'dashdot')  return '7,3,1.5,3';
+  if (style === 'longdash') return '11,4';
+  return ''; // solid
 }
-// Charcoal marker with a white halo so it reads on any stock color.
-function pfMarker(xc, y, hw, style, title) {
-  var lines = pfMarkerLines(style), x1 = (xc - hw).toFixed(1), x2 = (xc + hw).toFixed(1), out = '';
-  lines.forEach(function (l) {
-    var yy = (y + l.dy).toFixed(1);
-    out += '<line x1="' + x1 + '" y1="' + yy + '" x2="' + x2 + '" y2="' + yy + '" stroke="#fff" stroke-width="3.2" stroke-linecap="round"></line>';
-  });
-  lines.forEach(function (l) {
-    var yy = (y + l.dy).toFixed(1);
-    out += '<line x1="' + x1 + '" y1="' + yy + '" x2="' + x2 + '" y2="' + yy + '" stroke="#202124" stroke-width="1.6"' +
-           (l.dash ? ' stroke-dasharray="' + l.dash + '"' : '') + ' stroke-linecap="round"></line>';
-  });
-  if (title) out += '<rect x="' + x1 + '" y="' + (y - 4).toFixed(1) + '" width="' + (hw * 2).toFixed(1) + '" height="8" fill="transparent"><title>' + escapeHtml(title) + '</title></rect>';
+// Single charcoal line with a white halo so it reads on any stock color.
+function pfMarker(xc, y, hw, style, tip) {
+  var x1 = (xc - hw).toFixed(1), x2 = (xc + hw).toFixed(1), yy = y.toFixed(1), dash = pfMarkerDash(style);
+  var out = '<line x1="' + x1 + '" y1="' + yy + '" x2="' + x2 + '" y2="' + yy + '" stroke="#fff" stroke-width="3.2" stroke-linecap="round"></line>' +
+            '<line x1="' + x1 + '" y1="' + yy + '" x2="' + x2 + '" y2="' + yy + '" stroke="#202124" stroke-width="1.7"' +
+            (dash ? ' stroke-dasharray="' + dash + '"' : '') + ' stroke-linecap="round"></line>';
+  if (tip) out += '<rect x="' + x1 + '" y="' + (y - 4).toFixed(1) + '" width="' + (hw * 2).toFixed(1) + '" height="8" fill="transparent" data-tip="' + escapeHtml(tip) + '"></rect>';
   return out;
+}
+
+// Nice ticks every 10% from 0 out to the data range (both bounds rounded to 10%).
+function pfPctTicks(lo, hi) {
+  var step = 0.10;
+  var min = Math.min(0, Math.floor((lo - 1e-9) / step) * step);
+  var max = Math.max(0, Math.ceil((hi + 1e-9) / step) * step);
+  if (max <= min) max = min + step;
+  var ticks = [];
+  for (var v = min; v <= max + 1e-9; v += step) ticks.push(Math.round(v / step) * step);
+  return { min: min, max: max, ticks: ticks };
+}
+// Dual axis: % ticks every 10% (drives gridlines); $ axis aligned so $0 sits on
+// the %0 gridline and it covers the $ data. Returns both ranges + the % ticks.
+function pfDualAxis(pctLo, pctHi, dolLo, dolHi) {
+  var t = pfPctTicks(pctLo, pctHi), pMin = t.min, pMax = t.max;
+  var zf = (pMax - 0) / (pMax - pMin);           // fraction from top down to zero
+  var dHi = Math.max(0, dolHi), dLo = Math.min(0, dolLo), dMax, dMin;
+  if (zf >= 1 - 1e-9) { dMin = 0; dMax = dHi || 1; }
+  else if (zf <= 1e-9) { dMax = 0; dMin = dLo || -1; }
+  else { var a = Math.max(dHi, (-dLo) * zf / (1 - zf)); if (a <= 0) a = 1; dMax = a; dMin = -a * (1 - zf) / zf; }
+  return { pMin: pMin, pMax: pMax, ticks: t.ticks, dMin: dMin, dMax: dMax };
 }
 
 // ---------- Panel 2: return % per holding, with trailing-change markers ----------
 function pfBuildProfitBars(stats) {
   var items = stats.stocks.filter(function (s) { return s.cost > 0; });
-  var W = Math.max(760, 70 + items.length * 46), H = 470, padL = 62, padR = 24, padT = 66, padB = 92;
+  var W = Math.max(760, 90 + items.length * 48), H = 820, padL = 64, padR = 28, padT = 78, padB = 100;
   var plotW = W - padL - padR, plotH = H - padT - padB;
-  // Axis spans both the total-return bars AND the trailing-change markers.
   var vals = [];
   items.forEach(function (s) {
     vals.push(s.pctProfit);
     PF_PERIODS.forEach(function (p) { if (s.changes && s.changes[p.key] != null) vals.push(s.changes[p.key]); });
   });
-  var maxV = Math.max.apply(null, vals.concat([0])), minV = Math.min.apply(null, vals.concat([0]));
-  if (maxV === minV) maxV += 0.01;
-  var pad = (maxV - minV) * 0.10; maxV += pad; if (minV < 0) minV -= pad; else minV = 0;
-  var scaleY = function (v) { return padT + plotH * (maxV - v) / (maxV - minV); };
-  var zeroY = scaleY(0), parts = [];
+  var ax = pfPctTicks(Math.min.apply(null, vals.concat([0])), Math.max.apply(null, vals.concat([0])));
+  var scaleY = function (v) { return padT + plotH * (ax.max - v) / (ax.max - ax.min); };
+  var parts = [];
   parts.push(invText(W / 2, 26, stats.label + ' — Return % by holding', 19, '#1f1f1f', 'middle', 700));
-  // legend of marker styles (the only place they're labelled)
+  // gridlines + left-axis % ticks every 10%
+  ax.ticks.forEach(function (tk) {
+    var y = scaleY(tk), zero = Math.abs(tk) < 1e-9;
+    parts.push('<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) + '" stroke="' + (zero ? '#bbb' : '#ededed') + '" stroke-width="1"></line>');
+    parts.push(invText(padL - 6, y + 3.5, invFmtPct(tk, 0), 10, '#888', 'end', 400));
+  });
+  // marker-style legend (the only place markers are labelled)
   var lx = padL, ly = 48;
   PF_PERIODS.forEach(function (p) {
-    parts.push(pfMarker(lx + 12, ly, 12, p.style, ''));
-    parts.push(invText(lx + 29, ly + 4, p.label, 11, '#555', 'start', 400));
+    parts.push(pfMarker(lx + 13, ly, 13, p.style, ''));
+    parts.push(invText(lx + 31, ly + 4, p.label, 11, '#555', 'start', 400));
     lx += 66;
   });
   parts.push(invText(W - padR, ly + 4, 'bar = total return', 11, '#999', 'end', 400));
-  parts.push('<line x1="' + padL + '" y1="' + zeroY.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + zeroY.toFixed(1) + '" stroke="#ccc" stroke-width="1"></line>');
-  var slot = plotW / items.length, bw = Math.min(34, slot * 0.7);
+  var slot = plotW / items.length, bw = Math.min(36, slot * 0.7);
   items.forEach(function (s, i) {
     var v = s.pctProfit, cxc = padL + slot * i + slot / 2, x = cxc - bw / 2;
     var yTop = scaleY(Math.max(0, v)), yBot = scaleY(Math.min(0, v)), h = Math.max(1, yBot - yTop);
-    var fill = pfColor(s.colorIndex);
+    var fill = pfColor(s.colorIndex), tip = s.ticker + ': ' + invFmtPct(v, 1);
     parts.push('<rect x="' + x.toFixed(1) + '" y="' + yTop.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) +
-               '" rx="2" fill="' + fill + '"><title>' + escapeHtml(s.ticker + ': ' + invFmtPct(v, 1)) + '</title></rect>');
+               '" rx="2" fill="' + fill + '" data-tip="' + escapeHtml(tip) + '"></rect>');
     parts.push(pfXLabel(cxc, H - padB + 14, s.ticker));
-    // trailing-change markers on top of the bar
     var hw = bw / 2 + 4;
     PF_PERIODS.forEach(function (p) {
       var cv = s.changes ? s.changes[p.key] : null;
@@ -138,41 +154,59 @@ function pfBuildProfitBars(stats) {
 // ---------- Panel 3: LT capital-gain profit, $ (left axis) + % (right axis) ----------
 function pfBuildLtBars(stats) {
   var items = stats.stocks.filter(function (s) { return s.hasLtProfit; });
-  var W = Math.max(760, 90 + items.length * 56), H = 480, padL = 72, padR = 66, padT = 64, padB = 94;
+  var W = Math.max(760, 110 + items.length * 56), H = 820, padL = 82, padR = 82, padT = 66, padB = 100;
   var plotW = W - padL - padR, plotH = H - padT - padB;
-  function rng(arr) {
-    var mx = Math.max.apply(null, arr.concat([0])), mn = Math.min.apply(null, arr.concat([0]));
-    if (mx === mn) mx += 1;
-    var p = (mx - mn) * 0.12; mx += p; if (mn < 0) mn -= p; else mn = 0;
-    return [mn, mx];
-  }
-  var dr = rng(items.map(function (s) { return s.ltProfitDollar; }));
-  var pr = rng(items.map(function (s) { return s.ltProfitPct; }));
-  var sY = function (v) { return padT + plotH * (dr[1] - v) / (dr[1] - dr[0]); };
-  var sYp = function (v) { return padT + plotH * (pr[1] - v) / (pr[1] - pr[0]); };
+  var pcts = items.map(function (s) { return s.ltProfitPct; }), dols = items.map(function (s) { return s.ltProfitDollar; });
+  var ax = pfDualAxis(Math.min.apply(null, pcts.concat([0])), Math.max.apply(null, pcts.concat([0])),
+                      Math.min.apply(null, dols.concat([0])), Math.max.apply(null, dols.concat([0])));
+  var sYp = function (v) { return padT + plotH * (ax.pMax - v) / (ax.pMax - ax.pMin); };
+  var sY = function (v) { return padT + plotH * (ax.dMax - v) / (ax.dMax - ax.dMin); };
   var parts = [];
   parts.push(invText(W / 2, 24, stats.label + ' — Long-term capital-gain profit', 18, '#1f1f1f', 'middle', 700));
-  parts.push(invText(W / 2, 44, 'Solid = profit $ (left axis)   ·   Faded = profit % (right axis)', 12, '#666', 'middle', 400));
-  parts.push('<line x1="' + padL + '" y1="' + sY(0).toFixed(1) + '" x2="' + (W - padR) + '" y2="' + sY(0).toFixed(1) + '" stroke="#ccc" stroke-width="1"></line>');
-  // axis min/max tick labels
-  parts.push(invText(padL - 8, padT + 4, invFmtMoney(dr[1]), 9, '#999', 'end', 400));
-  parts.push(invText(padL - 8, padT + plotH, invFmtMoney(dr[0]), 9, '#999', 'end', 400));
-  parts.push(invText(W - padR + 8, padT + 4, invFmtPct(pr[1], 0), 9, '#999', 'start', 400));
-  parts.push(invText(W - padR + 8, padT + plotH, invFmtPct(pr[0], 0), 9, '#999', 'start', 400));
-  parts.push(invText(padL - 8, padT - 10, '$', 12, '#666', 'end', 700));
-  parts.push(invText(W - padR + 8, padT - 10, '%', 12, '#666', 'start', 700));
-  var slot = plotW / items.length, bw = Math.min(18, slot * 0.32);
+  parts.push(invText(W / 2, 44, 'Left bars & axis: profit $   ·   Right bars (faded) & axis: profit %', 12, '#666', 'middle', 400));
+  // gridlines at % ticks; left $ label (aligned) + right % label at each
+  ax.ticks.forEach(function (tk) {
+    var y = sYp(tk), zero = Math.abs(tk) < 1e-9;
+    parts.push('<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) + '" stroke="' + (zero ? '#bbb' : '#ededed') + '" stroke-width="1"></line>');
+    parts.push(invText(W - padR + 6, y + 3.5, invFmtPct(tk, 0), 10, '#888', 'start', 400));
+    var dVal = ax.dMax - (ax.dMax - ax.dMin) * ((y - padT) / plotH);
+    parts.push(invText(padL - 6, y + 3.5, invFmtMoney(dVal), 10, '#888', 'end', 400));
+  });
+  parts.push(invText(padL - 6, padT - 12, '$', 12, '#666', 'end', 700));
+  parts.push(invText(W - padR + 6, padT - 12, '%', 12, '#666', 'start', 700));
+  var slot = plotW / items.length, bw = Math.min(20, slot * 0.34);
   items.forEach(function (s, i) {
     var cxc = padL + slot * i + slot / 2, fill = pfColor(s.colorIndex);
-    var dv = s.ltProfitDollar, x1 = cxc - bw - 1, y1t = sY(Math.max(0, dv)), y1b = sY(Math.min(0, dv));
+    var dv = s.ltProfitDollar, x1 = cxc - bw - 1.5, y1t = sY(Math.max(0, dv)), y1b = sY(Math.min(0, dv)), tipD = s.ticker + ' LT profit: ' + invFmtMoney(dv);
     parts.push('<rect x="' + x1.toFixed(1) + '" y="' + y1t.toFixed(1) + '" width="' + bw + '" height="' + Math.max(1, y1b - y1t).toFixed(1) +
-               '" rx="2" fill="' + fill + '"><title>' + escapeHtml(s.ticker + ' LT profit: ' + invFmtMoney(dv)) + '</title></rect>');
-    var pv = s.ltProfitPct, x2 = cxc + 1, y2t = sYp(Math.max(0, pv)), y2b = sYp(Math.min(0, pv));
+               '" rx="2" fill="' + fill + '" data-tip="' + escapeHtml(tipD) + '"></rect>');
+    var pv = s.ltProfitPct, x2 = cxc + 1.5, y2t = sYp(Math.max(0, pv)), y2b = sYp(Math.min(0, pv)), tipP = s.ticker + ' LT profit: ' + invFmtPct(pv, 1);
     parts.push('<rect x="' + x2.toFixed(1) + '" y="' + y2t.toFixed(1) + '" width="' + bw + '" height="' + Math.max(1, y2b - y2t).toFixed(1) +
-               '" rx="2" fill="' + fill + '" fill-opacity="0.42" stroke="' + fill + '" stroke-width="1"><title>' + escapeHtml(s.ticker + ' LT profit: ' + invFmtPct(pv, 1)) + '</title></rect>');
+               '" rx="2" fill="' + fill + '" fill-opacity="0.4" stroke="' + fill + '" stroke-width="1" data-tip="' + escapeHtml(tipP) + '"></rect>');
     parts.push(pfXLabel(cxc, H - padB + 14, s.ticker));
   });
   return { width: W, height: H, inner: parts.join('') };
+}
+
+// ---------- Hover / tap value tooltip (works on desktop + mobile) ----------
+function pfEnsureTip() {
+  var el = document.getElementById('pf-tip');
+  if (!el) { el = document.createElement('div'); el.id = 'pf-tip'; document.body.appendChild(el); }
+  return el;
+}
+function pfWireTooltip(pageEl) {
+  var tip = pfEnsureTip();
+  function at(ev) {
+    var el = ev.target && ev.target.closest ? ev.target.closest('[data-tip]') : null;
+    if (!el) { tip.style.display = 'none'; return; }
+    tip.textContent = el.getAttribute('data-tip');
+    tip.style.display = 'block';
+    tip.style.left = (ev.clientX + 12) + 'px';
+    tip.style.top = (ev.clientY + 12) + 'px';
+  }
+  pageEl.addEventListener('pointermove', at);
+  pageEl.addEventListener('pointerdown', at);
+  pageEl.addEventListener('pointerleave', function () { tip.style.display = 'none'; });
 }
 
 // ---------- page build / load / render ----------
@@ -205,6 +239,7 @@ function pfBuildPage(key) {
   page.querySelectorAll('[data-pfx]').forEach(function (b) {
     b.addEventListener('click', function () { var p = b.getAttribute('data-pfx').split('|'); pfExport(p[0], p[1], p[2]); });
   });
+  pfWireTooltip(page); // hover/tap value tooltip (delegated; survives re-render)
 }
 function pfLoad(key) {
   google.script.run
