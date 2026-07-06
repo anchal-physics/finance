@@ -35,7 +35,8 @@ personal/family finance workbook in Google Sheets). It does three things:
    **Anchal** and **Anamika**, alongside the PayrollSankey landing tab.
    Each renders, from the `Investment` sheet: a hand-rolled SVG **donut/pie**
    (categories as color groups, tickers as shaded sub-slices split by dotted
-   radial lines, with an HTML legend of %/weekly-$), a hand-rolled SVG **bar
+   radial lines) with an **alphabetical allocation table** beside it (ticker /
+   weekly $ / % of strategy, `invBuildAllocTable`), a hand-rolled SVG **bar
    chart** of strategy-weighted 6mo/1yr/3yr/5yr returns, a per-chart
    **settings** panel, and a full-parity **editor** over that investor's
    columns. Both charts embed a subtitle: *"Investing $X/week at an effective

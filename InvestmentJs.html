@@ -180,7 +180,25 @@ function invRenderCharts(investor) {
   if (!st.model) return;
   var s = st.settings;
   invApplySvg(document.getElementById('inv-pie-' + investor), invBuildPie(st.model, s));
+  document.getElementById('inv-alloc-' + investor).innerHTML = invBuildAllocTable(st.model, s);
   invApplySvg(document.getElementById('inv-bar-' + investor), invBuildBar(st.model, s));
+}
+
+// Alphabetical ticker table beside the pie: symbol · weekly $ · % of strategy.
+function invBuildAllocTable(model, s) {
+  var prec = s.shared.pctPrecision, rows = [];
+  model.categories.forEach(function (cat) { cat.tickers.forEach(function (t) { rows.push(t); }); });
+  rows.sort(function (a, b) { return a.symbol < b.symbol ? -1 : (a.symbol > b.symbol ? 1 : 0); });
+  if (!rows.length) return '<div class="chart-empty">No allocation.</div>';
+  var html = '<table class="alloc-tbl"><thead><tr><th>Ticker</th><th class="num">Weekly</th><th class="num">%</th></tr></thead><tbody>';
+  rows.forEach(function (t) {
+    html += '<tr><td class="sym">' + escapeHtml(t.symbol) + '</td>' +
+            '<td class="num">' + invFmtMoney(t.weekly) + '</td>' +
+            '<td class="num">' + invFmtPct(t.weightPct, prec) + '</td></tr>';
+  });
+  html += '</tbody><tfoot><tr><td>Total</td><td class="num">' + invFmtMoney(model.totalWeekly) +
+          '</td><td class="num">' + invFmtPct(model.totalWeightPct, 0) + '</td></tr></tfoot></table>';
+  return html;
 }
 
 // ---------- settings panel ----------
@@ -399,7 +417,10 @@ function invPageHtml(investor) {
         '<button class="btn ghost sm" data-x="' + investor + '|pie|png">PNG</button>' +
         '<button class="btn ghost sm" data-x="' + investor + '|pie|pdf">PDF</button>' +
       '</span></summary>' +
-      '<div class="panel-body"><div class="chart-wrap"><svg id="inv-pie-' + investor + '" class="chart-svg"></svg></div></div></details>' +
+      '<div class="panel-body"><div class="inv-alloc">' +
+        '<div class="chart-wrap"><svg id="inv-pie-' + investor + '" class="chart-svg"></svg></div>' +
+        '<div class="alloc-table" id="inv-alloc-' + investor + '"></div>' +
+      '</div></div></details>' +
     '<details class="panel" open><summary>Historical growth rate' +
       '<span class="chart-toolbar">' +
         '<button class="btn ghost sm" data-x="' + investor + '|bar|png">PNG</button>' +
