@@ -19,9 +19,8 @@
  */
 
 var PORTFOLIOS_ = {
-  Anchal: { key: 'Anchal', sheetName: 'Portfolio_AG', label: 'Anchal Portfolio' }
-  // Add later, once the sheet exists:
-  // Anamika: { key: 'Anamika', sheetName: 'Portfolio_AA', label: 'Anamika Portfolio' }
+  Anchal:  { key: 'Anchal',  sheetName: 'Portfolio_AG', label: 'Anchal Portfolio' },
+  Anamika: { key: 'Anamika', sheetName: 'Portfolio_AA', label: 'Anamika Portfolio' }
 };
 
 // Column letters on the portfolio sheet; data starts row 2 (row 1 = header).
