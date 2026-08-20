@@ -1,0 +1,17 @@
+# Conda environment for the effective-holdings script (portable / cross-platform).
+# The local `finance` env is just Python + these pip packages, so this mirrors it.
+# NOTE: the GitHub Actions CI uses pip + requirements.txt (faster / fewer paid
+# minutes); this file is here only if you'd rather recreate the env with conda:
+#     conda env create -f environment.yml        # creates env "finance"
+#     conda activate finance
+name: finance
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - openpyxl>=3.1
+      - yahooquery>=2.3.7
+      - pandas>=2.0
+      - gspread>=6.0
