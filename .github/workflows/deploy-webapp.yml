@@ -1,0 +1,98 @@
+name: Deploy Capuchin webapp
+
+# Push-to-deploy: on a push to main that touches the Apps Script sources, clasp
+# pushes the project and publishes a new version to the existing web-app
+# deployment (same /exec URL). Modelled on Blue-Laser-Fusion's deploy workflow,
+# but (a) this project is many .gs/.html files, so we push the whole repo via
+# .clasp.json + .claspignore instead of building a single Code.gs, and (b) the
+# script is owned by a personal @gmail.com account (no Workspace domain-wide
+# delegation), so clasp authenticates with the owner's stored OAuth token
+# (CLASPRC_JSON) rather than a service-account impersonation.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "*.gs"
+      - "*.html"
+      - "appsscript.json"
+      - ".claspignore"
+      - ".github/workflows/deploy-webapp.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-webapp
+  cancel-in-progress: true   # only the latest push needs to deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install clasp (pinned to the version used locally)
+        run: npm install -g @google/clasp@3.3.0
+
+      # Mint a FRESH access token from the stored refresh token every run, so the
+      # 1-hour access-token expiry can never break the deploy. Only the refresh
+      # token needs to stay valid (see WEBAPP_DEPLOY_CI.md for a durable one).
+      - name: Authenticate clasp (refresh OAuth access token)
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          node <<'EOF'
+          (async () => {
+            const fs = require('fs');
+            let rc;
+            try { rc = JSON.parse(process.env.CLASPRC_JSON); }
+            catch (e) { console.error('CLASPRC_JSON secret is not valid JSON.'); process.exit(1); }
+            const t = (rc.tokens && rc.tokens.default) ? rc.tokens.default : rc;
+            if (!t.refresh_token || !t.client_id || !t.client_secret) {
+              console.error('clasprc is missing refresh_token / client_id / client_secret.'); process.exit(1);
+            }
+            const res = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                client_id: t.client_id, client_secret: t.client_secret,
+                refresh_token: t.refresh_token, grant_type: 'refresh_token'
+              })
+            });
+            if (!res.ok) {
+              console.error('::error::Token refresh failed (HTTP ' + res.status + '). The stored refresh token is '
+                + 'likely expired/revoked — run `clasp login` locally and update the CLASPRC_JSON secret '
+                + '(see WEBAPP_DEPLOY_CI.md for a non-expiring setup).');
+              console.error(await res.text());
+              process.exit(1);
+            }
+            const j = await res.json();
+            t.access_token = j.access_token;
+            t.expiry_date = Date.now() + (j.expires_in || 3600) * 1000;
+            const out = rc.tokens ? rc : { tokens: { default: t } };
+            fs.writeFileSync(process.env.HOME + '/.clasprc.json', JSON.stringify(out));
+            console.log('clasp access token refreshed (valid ~' + (j.expires_in || 3600) + 's).');
+          })().catch(e => { console.error(e); process.exit(1); });
+          EOF
+
+      - name: Write .clasp.json (scriptId from secret; .clasp.json is gitignored)
+        env:
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: printf '{"scriptId":"%s","rootDir":"."}' "$SCRIPT_ID" > .clasp.json
+
+      - name: Push project to Apps Script
+        run: clasp push --force        # obeys .claspignore (from the repo)
+
+      - name: Publish new version to the web-app deployment
+        env:
+          DEPLOY_ID: ${{ secrets.DEPLOY_ID }}
+        run: clasp deploy -i "$DEPLOY_ID" -d "Auto-deploy from GitHub $(date -u +%Y-%m-%dT%H:%M:%SZ)"

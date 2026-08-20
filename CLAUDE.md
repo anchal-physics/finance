@@ -176,6 +176,18 @@ via `clasp deployments`; the `@<number>` entry, not `@HEAD`). Plain `clasp
 deploy` with no `-i` mints a *new* deployment (new URL) — avoid. Mobile browsers
 cache the HTML, so hard-refresh the phone after deploying.
 
+**Push-to-deploy CI** (`.github/workflows/deploy-webapp.yml`): a push to `main`
+touching `*.gs`/`*.html`/`appsscript.json` (or a manual run) does the same
+push+deploy on GitHub, independent of any local machine. Auth can't use a
+service account (personal `@gmail.com` → no Workspace domain-wide delegation, and
+the Apps Script API rejects service accounts), so it authenticates as the owner
+via a stored clasp OAuth token (`CLASPRC_JSON` secret) generated from a **custom
+Published OAuth client** (durable refresh token) and mints a fresh access token
+each run. Secrets: `CLASPRC_JSON`, `SCRIPT_ID`, `DEPLOY_ID`. Full setup in
+**`WEBAPP_DEPLOY_CI.md`**. (`DEPLOY_USER_EMAIL` is unused; `SERVICE_ACCOUNT_KEY`
+belongs to the holdings workflow, which legitimately uses a service account
+against the *Sheets* API.)
+
 ### Critical safety guardrails (we learned these the hard way)
 
 - **`clasp push` syncs local → remote and DELETES remote files that
