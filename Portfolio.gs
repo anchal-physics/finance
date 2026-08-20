@@ -56,7 +56,9 @@ function getPortfolioStats(key) {
   if (!sheet) throw new Error('Sheet "' + cfg.sheetName + '" not found.');
 
   var base = colLetterToIndex_('N');                       // 0-based sheet column of N
-  var numCols = colLetterToIndex_(PF_LAST_COL) - base + 1; // N..AF
+  // Read out to AO so we also pick up the Sankey flow block AM|AN|AO that the
+  // local update_effective_holdings.py script writes (Source | Value | Target).
+  var numCols = colLetterToIndex_('AO') - base + 1;        // N..AO
   var lastRow = sheet.getLastRow();
   if (lastRow < PF_FIRST_DATA_ROW) {
     return { key: cfg.key, label: cfg.label, stocks: [], totals: { value: 0, cost: 0, profitDollar: 0, profitPct: 0 } };
@@ -96,10 +98,27 @@ function getPortfolioStats(key) {
   stocks.sort(function (a, b) { return b.value - a.value; });
   stocks.forEach(function (s, i) { s.colorIndex = i; });
 
+  // Effective-holdings Sankey flows from AM (source) | AN (value) | AO (target).
+  // Row 1 is the header ("Source"); data starts row 2.
+  var amRel = colLetterToIndex_('AM') - base;
+  var anRel = colLetterToIndex_('AN') - base;
+  var aoRel = colLetterToIndex_('AO') - base;
+  var flows = [];
+  for (var fr = PF_FIRST_DATA_ROW - 1; fr < lastRow; fr++) {
+    var src = vals[fr][amRel];
+    if (src === '' || src == null) continue;
+    src = String(src).trim();
+    if (src === '' || src === 'Source') continue;
+    var fv = pfNum_(vals[fr][anRel]);
+    if (fv <= 0) continue;
+    flows.push({ source: src, value: fv, target: String(vals[fr][aoRel] == null ? '' : vals[fr][aoRel]).trim() });
+  }
+
   return {
     key: cfg.key,
     label: cfg.label,
     stocks: stocks,
+    flows: flows,
     totals: {
       value: totalValue,
       cost: totalCost,

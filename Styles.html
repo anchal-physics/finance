@@ -128,6 +128,8 @@
   /* Bar charts can be wider than the viewport → scroll horizontally rather than squish */
   .chart-scroll { overflow-x: auto; }
   .pf-chart { display: block; height: 68vh; max-height: 680px; min-height: 420px; width: auto; background: #fff; }
+  /* Effective-holdings Sankey: fill the width; height follows the (tall) viewBox */
+  .pf-sankey { display: block; width: 100%; height: auto; background: #fff; }
   #pf-tip { position: fixed; z-index: 1500; background: #202124; color: #fff; font-size: 12px;
             padding: 4px 8px; border-radius: 4px; pointer-events: none; display: none; white-space: nowrap;
             box-shadow: 0 2px 8px rgba(0,0,0,0.25); }

@@ -57,7 +57,10 @@ SHEETS = os.environ.get("EFF_SHEETS", "Portfolio_AG,Portfolio_AA").split(",")
 #   SUMMARY : Holding | Value ($) | %   — the flat effective-holdings table.
 SANKEY_START_COL = os.environ.get("EFF_SANKEY_COL", "AM")    # → AM, AN, AO
 SUMMARY_START_COL = os.environ.get("EFF_SUMMARY_COL", "AQ")  # → AQ, AR, AS
-TOP_TARGETS = int(os.environ.get("EFF_TOP_TARGETS", "24"))   # distinct right nodes; rest → "Other holdings"
+try:
+    TOP_TARGETS = int(os.environ.get("EFF_TOP_TARGETS") or 24)   # distinct right nodes; rest → "Other holdings"
+except ValueError:
+    TOP_TARGETS = 24
 
 MAX_SCAN_ROW = 300          # portfolio positions never exceed this row
 RESIDUAL_MIN_FRAC = 0.002   # ignore an ETF's residual if < 0.2% of the position

@@ -12,6 +12,10 @@ on:
         description: "Comma-separated Portfolio sheet names to update"
         type: string
         default: "Portfolio_AG,Portfolio_AA"
+      top_targets:
+        description: "Max distinct company nodes in the Sankey (the rest fold into 'Other holdings')"
+        type: string
+        default: "24"
 
 permissions:
   contents: read          # workflow writes to Google, not to the repo
@@ -47,6 +51,7 @@ jobs:
           FINANCE_SHEET_ID: ${{ secrets.FINANCE_SHEET_ID }}
           GSPREAD_SA_FILE: service_account.json
           EFF_SHEETS: ${{ inputs.sheets }}
+          EFF_TOP_TARGETS: ${{ inputs.top_targets }}
         run: |
           FLAG=""
           if [ "${{ inputs.dry_run }}" = "true" ]; then FLAG="--dry-run"; fi

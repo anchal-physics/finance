@@ -308,16 +308,27 @@ cost basis and each lot's acquisition date (holding period) are preserved.
 **Portfolio-stats page** (`Portfolio.gs` + `PortfolioJs.html`, tab "Anchal
 Portfolio"). Reads the computed columns to the right of the spill:
 `N` ticker · `T` cost · `U` price · `V` current value · `Y` LT profit $ ·
-`Z` LT profit % (fraction) · `AB`–`AF` trailing % changes (1w/4w/12w/6m/1y).
-Three panels: (1) pie of holdings by `V` + a stats box (total value / $ profit /
-% profit); (2) return-% bars (`(V−T)/T`) per holding with **trailing-change
-markers** drawn as distinct line styles — 1w dotted, 4w dashed, 12w
-double-dashed, 6m solid, 1y double-solid (one neutral color, legend at top, no
-in-place labels); (3) LT capital-gain profit as dual-axis bars ($ left, % right;
-excludes 0/empty). **Each stock keeps a stable color** (value-sorted index into
-the `nested` palette) across all three panels. Config-driven: add
-`Portfolio_AA` for Anamika by adding one `PORTFOLIOS_` entry — the client builds
-the tab + page from `getPortfolioList()`.
+`Z` LT profit % (fraction) · `AB`–`AF` trailing % changes (1w/4w/12w/6m/1y) ·
+`AM`–`AO` effective-holdings **Sankey flow block** (`Source | Value | Target`,
+header row 1) written by `update_effective_holdings.py`.
+Four panels: (1) pie of holdings by `V` + a stats box (total value / $ profit /
+% profit); (2) **effective-holdings Sankey** (`pfRenderSankey`, d3-sankey) —
+left nodes = original positions (coloured to match the pie), right nodes = the
+look-through companies + `"<ETF> — other holdings"` residuals + a folded "Other
+holdings"; reads `stats.flows` from `AM:AO`; empty until the script has pushed
+data; (3) return-% bars (`(V−T)/T`) per holding with **trailing-change markers**
+as distinct line styles — 1w dotted, 4w dashed, 12w dash-dot, 6m long-dash,
+1y solid (one neutral color, legend at top, no in-place labels); (4) LT
+capital-gain profit as dual-axis bars ($ left, % right; excludes 0/empty).
+**Each stock keeps a stable color** (value-sorted index into the `nested`
+palette) across the pie, the Sankey's source nodes, and the bar charts.
+Config-driven: add `Portfolio_AA` for Anamika by adding one `PORTFOLIOS_` entry
+— the client builds the tab + page from `getPortfolioList()`.
+
+The `AM:AO` flow data comes from the local **`update_effective_holdings.py`**
+(`--online`), which decomposes ETFs via `yahooquery` and surgically writes the
+Sankey block (and a `AQ:AS` summary). See `SERVICE_ACCOUNT_SETUP.md` and the
+`.github/workflows/update-holdings.yml` manual Action.
 
 ### Sheet: Investment
 
