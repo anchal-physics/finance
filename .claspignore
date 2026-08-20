@@ -1,16 +1,37 @@
 # Denylist mode — files clasp should NOT push.
 # Everything else in this folder is pushed. This prevents future
 # `clasp push` from deleting remote files we don't have locally.
+#
+# ⚠️ clasp reads THIS file, NOT .gitignore. Anything with a pushable extension
+# (.gs / .js / .html, plus appsscript.json) that isn't ignored here gets pushed
+# into the Apps Script project. A stray .js under .venv once got pushed and
+# broke every server function ("TextEncoder is not defined"). Keep the Python /
+# tooling / secret paths below ignored.
 
 .git/**
 .gitignore
 node_modules/**
+
+# Python tooling & CI (NOT Apps Script — must never be pushed)
+.venv/**
+__pycache__/**
+.github/**
+service_account.json
+*.py
+*.yml
+*.yaml
+*.txt
+*.bak
+*.sh
+
+# Data / docs / assets
 *.xlsx
 *.md
 *.png
 logo/**
 error_message.txt
+
+# clasp / auth config
 .clasp.json
 .clasprc.json
 .claspignore
-setup.sh

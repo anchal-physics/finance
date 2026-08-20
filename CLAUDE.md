@@ -186,6 +186,20 @@ cache the HTML, so hard-refresh the phone after deploying.
   push output before assuming all files are safe**. If clasp lists
   files it's about to delete, abort and add them locally first.
 
+- **⚠️ clasp obeys `.claspignore`, NOT `.gitignore`.** In denylist mode any
+  pushable-extension file (`.gs`/`.js`/`.html`, plus `appsscript.json`) that
+  isn't ignored in `.claspignore` gets pushed as project code. The Python work
+  introduced `.venv/` (gitignored but NOT claspignored), so `./deploy.sh` pushed
+  urllib3's `emscripten_fetch_worker.js` into the project; its top-level
+  `new TextEncoder()` (undefined in GAS) threw at load and broke EVERY server
+  function (`FedTax`, `GET_ALL_STOCK_SUMMARIES` → "TextEncoder is not defined").
+  Fixed by ignoring `.venv/**`, `service_account.json`, `.github/**`, `*.py`,
+  `*.yml`, `*.sh`, `*.bak`, `__pycache__/**` in `.claspignore`, and `deploy.sh`
+  now aborts (via `clasp status`) if any non-project file is in the push set.
+  **Recovery after such a bad push:** fix `.claspignore`, then `clasp push
+  --force` — it makes the remote match the (now-clean) local set, deleting the
+  junk; custom functions run at HEAD so they recover immediately.
+
 - **One-time UI steps** in the Apps Script editor that clasp can't do:
   - Enable the **Google Sheets API** advanced service
     (Services → + → Google Sheets API). Needed for `moveSheetRow()`.

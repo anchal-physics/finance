@@ -13,6 +13,16 @@ cd "$(dirname "$0")"
 
 command -v clasp >/dev/null 2>&1 || { echo "clasp not found (npm i -g @google/clasp)." >&2; exit 1; }
 
+# Safety net: clasp obeys .claspignore (NOT .gitignore). Make sure it isn't
+# about to push non-Apps-Script files (e.g. a stray .js under .venv, or the
+# service-account key). Only inspect the "Not ignored files" section.
+NOT_IGNORED="$(clasp status 2>/dev/null | awk '/Not ignored files/{f=1;next} /Ignored files/{f=0} f')"
+if printf '%s\n' "$NOT_IGNORED" | grep -qiE '\.venv/|site-packages|node_modules|__pycache__|service_account\.json|\.py$'; then
+  echo "✗ Aborting: clasp would push non-project files — fix .claspignore. clasp status:" >&2
+  clasp status >&2
+  exit 1
+fi
+
 echo "▸ Pushing…"
 clasp push --force
 
