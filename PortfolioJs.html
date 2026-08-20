@@ -292,7 +292,13 @@ function pfRenderSankey(key, s) {
     .attr('font-family', INV_FONT).attr('font-size', 15).attr('font-weight', 700).attr('fill', '#1f1f1f')
     .text(s.label + ' — effective holdings (look-through)');
 
+  // Order each column top→bottom: real individual stocks first, then the
+  // "<ETF> — other holdings" / "Other holdings" buckets — each group by value
+  // (== % of portfolio) descending. (Sources have no "other holdings", so the
+  // left column just ends up value-descending.)
+  function pfIsOther(n) { return /other holdings/i.test(n.name || ''); }
   var sankey = d3.sankey().nodeWidth(13).nodePadding(7).nodeAlign(d3.sankeyLeft)
+    .nodeSort(function (a, b) { return (pfIsOther(a) - pfIsOther(b)) || ((b.value || 0) - (a.value || 0)); })
     .extent([[64, 30], [W - 220, H - 16]]);
   var graph;
   try {
