@@ -18,7 +18,6 @@ var INV = {
 };
 var ACTIVE_PAGE = 'sankey';
 var INV_REORDER_WARNED = false;
-var invSettingsTimers = {};
 
 // ---------- small formatters / color helpers ----------
 function invPalette(name) { return PALETTES[name] || PALETTES['cat10']; }
@@ -223,41 +222,19 @@ function invSettingsHtml(investor) {
       '<div class="setting-row"><label>Export width</label><input type="number" min="200" data-s="bar.width"></div>' +
       '<div class="setting-row"><label>Export height</label><input type="number" min="200" data-s="bar.height"></div>' +
     '</div>' +
-    '<div style="margin-top:10px;"><button class="btn ghost sm" data-inv-reset="' + investor + '">Reset to defaults</button></div>';
+    '<div style="margin-top:10px;"><button class="btn ghost sm" data-s-reset="1">Reset to defaults</button></div>';
 }
-function invApplySettingsToUi(investor) {
-  var s = INV[investor].settings, root = document.getElementById('inv-settings-' + investor);
-  root.querySelectorAll('[data-s]').forEach(function (el) {
-    var path = el.getAttribute('data-s').split('.'), v = s[path[0]][path[1]];
-    if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
-  });
-}
+// Thin wrapper over the shared wireSettingsPanel() in CoreJs (dot-paths like
+// "pie.width" are handled generically); only the HTML + re-render are inv-specific.
 function invWireSettings(investor) {
-  var root = document.getElementById('inv-settings-' + investor);
-  root.innerHTML = invSettingsHtml(investor);
-  invApplySettingsToUi(investor);
-  root.querySelectorAll('[data-s]').forEach(function (el) {
-    var evt = (el.type === 'checkbox' || el.tagName === 'SELECT' || el.type === 'color') ? 'change' : 'input';
-    el.addEventListener(evt, function () {
-      var path = el.getAttribute('data-s').split('.'), s = INV[investor].settings;
-      var val = el.type === 'checkbox' ? el.checked : (el.type === 'number' ? Number(el.value) : el.value);
-      s[path[0]][path[1]] = val;
-      invRenderCharts(investor);
-      invPersistSettings(investor);
-    });
+  wireSettingsPanel({
+    rootId: 'inv-settings-' + investor,
+    html: invSettingsHtml(investor),
+    get: function () { return INV[investor].settings; },
+    reset: function () { INV[investor].settings = JSON.parse(JSON.stringify(INV_DEFAULTS)); },
+    onChange: function () { invRenderCharts(investor); },
+    saveKey: 'inv:' + investor
   });
-  root.querySelector('[data-inv-reset]').addEventListener('click', function () {
-    INV[investor].settings = JSON.parse(JSON.stringify(INV_DEFAULTS));
-    invApplySettingsToUi(investor);
-    invRenderCharts(investor);
-    invPersistSettings(investor);
-  });
-}
-function invPersistSettings(investor) {
-  if (invSettingsTimers[investor]) clearTimeout(invSettingsTimers[investor]);
-  invSettingsTimers[investor] = setTimeout(function () {
-    google.script.run.saveNamedSettings('inv:' + investor, JSON.stringify(INV[investor].settings));
-  }, 600);
 }
 
 // ---------- editor (broad-category sub-panels) ----------

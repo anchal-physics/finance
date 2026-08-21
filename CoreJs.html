@@ -107,6 +107,56 @@ function exportSvgStringToPdf(svgStr) {
 }
 
 
+// ---------- generic settings-panel plumbing (shared) ----------
+// Both the Investment charts and the Portfolio Sankey render a settings panel
+// of <input>/<select>/<checkbox> controls tagged with `data-s="<dot.path>"`,
+// two-way-bound to a per-chart settings object, debounce-persisted via
+// saveNamedSettings, and re-rendered on change. This factors out that plumbing
+// so each feature only supplies its HTML, its settings object, and an onChange.
+function settingsGetPath(obj, path) {
+  var p = path.split('.'); for (var i = 0; i < p.length && obj != null; i++) obj = obj[p[i]]; return obj;
+}
+function settingsSetPath(obj, path, val) {
+  var p = path.split('.'); for (var i = 0; i < p.length - 1; i++) obj = obj[p[i]]; obj[p[p.length - 1]] = val;
+}
+function settingsReadEl(el) {
+  return el.type === 'checkbox' ? el.checked : (el.type === 'number' ? Number(el.value) : el.value);
+}
+function settingsApplyToUi(root, get) {
+  root.querySelectorAll('[data-s]').forEach(function (el) {
+    var v = settingsGetPath(get(), el.getAttribute('data-s'));
+    if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+  });
+}
+// opts: { rootId, html, get()->settings, reset()->void (installs fresh defaults on the same object graph), onChange(), saveKey }
+function wireSettingsPanel(opts) {
+  var root = document.getElementById(opts.rootId);
+  root.innerHTML = opts.html;
+  settingsApplyToUi(root, opts.get);
+  root.querySelectorAll('[data-s]').forEach(function (el) {
+    var evt = (el.type === 'checkbox' || el.tagName === 'SELECT' || el.type === 'color') ? 'change' : 'input';
+    el.addEventListener(evt, function () {
+      settingsSetPath(opts.get(), el.getAttribute('data-s'), settingsReadEl(el));
+      opts.onChange();
+      persistNamedSettings(opts.saveKey, opts.get());
+    });
+  });
+  var resetBtn = root.querySelector('[data-s-reset]');
+  if (resetBtn) resetBtn.addEventListener('click', function () {
+    opts.reset();
+    settingsApplyToUi(root, opts.get);
+    opts.onChange();
+    persistNamedSettings(opts.saveKey, opts.get());
+  });
+}
+var SETTINGS_TIMERS = {};
+function persistNamedSettings(key, obj) {
+  if (SETTINGS_TIMERS[key]) clearTimeout(SETTINGS_TIMERS[key]);
+  SETTINGS_TIMERS[key] = setTimeout(function () {
+    google.script.run.saveNamedSettings(key, JSON.stringify(obj));
+  }, 600);
+}
+
 var toastTimer = null;
 function toast(msg) {
   var t = document.getElementById('toast');

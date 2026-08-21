@@ -7,7 +7,20 @@
 // export*, PALETTES). Each stock gets a stable color (by value-sorted index)
 // used consistently across the pie and both bar charts.
 
-var PF = {};          // key -> { stats, built, loaded }
+var PF = {};          // key -> { stats, built, loaded, settings }
+
+// Per-portfolio Sankey settings (persisted per-user via getNamedSettings, key
+// "pf:<key>"). Mirrors the Investment settings panel.
+var PF_DEFAULTS = {
+  nodeWidth: 13, nodePadding: 7, rowHeight: 17,
+  linkOpacity: 40, fontSize: 10, align: 'left', showValues: false
+};
+function pfMergeSettings(saved) {
+  var d = {};
+  for (var k in PF_DEFAULTS) d[k] = PF_DEFAULTS[k];
+  if (saved && typeof saved === 'object') for (var j in d) if (j in saved) d[j] = saved[j];
+  return d;
+}
 
 function pfPalette() { return PALETTES['nested'] || PALETTES['cat10']; }
 function pfColor(i) { var p = pfPalette(); return p[i % p.length]; }
@@ -219,6 +232,8 @@ function pfPageHtml(key, label) {
       '</div></div></details>' +
     '<details class="panel" open><summary>Effective holdings (look-through)' + pfToolbar(key, 'sankey') + '</summary>' +
       '<div class="panel-body"><div class="chart-wrap"><svg id="pf-sankey-' + key + '" class="pf-sankey"></svg></div></div></details>' +
+    '<details class="panel"><summary>Sankey settings</summary>' +
+      '<div class="panel-body" id="pf-settings-' + key + '"></div></details>' +
     '<details class="panel" open><summary>Return % by holding' + pfToolbar(key, 'ret') + '</summary>' +
       '<div class="panel-body"><div class="chart-wrap chart-scroll"><svg id="pf-ret-' + key + '" class="pf-chart"></svg></div></div></details>' +
     '<details class="panel" open><summary>Long-term capital-gain profit ($ / %)' + pfToolbar(key, 'lt') + '</summary>' +
@@ -231,8 +246,18 @@ function pfToolbar(key, chart) {
 }
 function portfolioActivate(key) {
   var st = PF[key] || (PF[key] = {});
-  if (!st.built) { pfBuildPage(key); st.built = true; }
-  if (!st.loaded) pfLoad(key);
+  if (!st.built) {
+    if (!st.settings) { pfLoadSettings(key, function () { pfBuildPage(key); st.built = true; pfLoad(key); }); }
+    else { pfBuildPage(key); st.built = true; pfLoad(key); }
+  } else if (!st.loaded) {
+    pfLoad(key);
+  }
+}
+function pfLoadSettings(key, cb) {
+  google.script.run
+    .withSuccessHandler(function (saved) { (PF[key] || (PF[key] = {})).settings = pfMergeSettings(saved); cb(); })
+    .withFailureHandler(function () { (PF[key] || (PF[key] = {})).settings = pfMergeSettings(null); cb(); })
+    .getNamedSettings('pf:' + key);
 }
 function pfBuildPage(key) {
   var page = document.getElementById('page-pf-' + key);
@@ -241,7 +266,37 @@ function pfBuildPage(key) {
   page.querySelectorAll('[data-pfx]').forEach(function (b) {
     b.addEventListener('click', function () { var p = b.getAttribute('data-pfx').split('|'); pfExport(p[0], p[1], p[2]); });
   });
+  pfWireSettings(key);
   pfWireTooltip(page); // hover/tap value tooltip (delegated; survives re-render)
+}
+
+// ---------- Sankey settings panel (per portfolio, persisted) ----------
+// Feature-specific HTML only; the apply/wire/persist plumbing is the shared
+// wireSettingsPanel() in CoreJs (also used by the Investment charts).
+function pfSettingsHtml() {
+  var alignOpts = ['justify', 'left', 'right', 'center']
+    .map(function (a) { return '<option value="' + a + '">' + a + '</option>'; }).join('');
+  return '' +
+    '<div class="settings-grid">' +
+      '<div class="setting-row"><label>Node width (px)</label><input type="number" min="2" max="60" data-s="nodeWidth"></div>' +
+      '<div class="setting-row"><label>Node padding (px)</label><input type="number" min="0" max="40" data-s="nodePadding"></div>' +
+      '<div class="setting-row"><label>Row height (px)</label><input type="number" min="8" max="60" data-s="rowHeight"></div>' +
+      '<div class="setting-row"><label>Link opacity (%)</label><input type="number" min="5" max="100" data-s="linkOpacity"></div>' +
+      '<div class="setting-row"><label>Label font size (px)</label><input type="number" min="6" max="20" data-s="fontSize"></div>' +
+      '<div class="setting-row"><label>Node alignment</label><select data-s="align">' + alignOpts + '</select></div>' +
+      '<div class="setting-row"><label>Show $ in labels</label><input type="checkbox" data-s="showValues"></div>' +
+    '</div>' +
+    '<div style="margin-top:10px;"><button class="btn ghost sm" data-s-reset="1">Reset to defaults</button></div>';
+}
+function pfWireSettings(key) {
+  wireSettingsPanel({
+    rootId: 'pf-settings-' + key,
+    html: pfSettingsHtml(),
+    get: function () { return PF[key].settings; },
+    reset: function () { PF[key].settings = pfMergeSettings(null); },
+    onChange: function () { if (PF[key].stats) pfRenderSankey(key, PF[key].stats); },
+    saveKey: 'pf:' + key
+  });
 }
 function pfLoad(key) {
   google.script.run
@@ -285,7 +340,12 @@ function pfRenderSankey(key, s) {
   var cmap = {};
   (s.stocks || []).forEach(function (st) { cmap[st.ticker] = pfColor(st.colorIndex); });
 
-  var W = 940, H = Math.max(560, Math.max(Object.keys(srcSet).length, Object.keys(tgtSet).length) * 17 + 60);
+  var cfg = (PF[key] && PF[key].settings) || PF_DEFAULTS;
+  var alignFn = cfg.align === 'justify' ? d3.sankeyJustify
+    : cfg.align === 'right' ? d3.sankeyRight
+    : cfg.align === 'center' ? d3.sankeyCenter : d3.sankeyLeft;
+
+  var W = 940, H = Math.max(560, Math.max(Object.keys(srcSet).length, Object.keys(tgtSet).length) * (cfg.rowHeight || 17) + 60);
   svg.attr('viewBox', '0 0 ' + W + ' ' + H).attr('preserveAspectRatio', 'xMidYMid meet');
   svg.append('rect').attr('width', W).attr('height', H).attr('fill', '#fff');
   svg.append('text').attr('x', W / 2).attr('y', 18).attr('text-anchor', 'middle')
@@ -297,7 +357,7 @@ function pfRenderSankey(key, s) {
   // (== % of portfolio) descending. (Sources have no "other holdings", so the
   // left column just ends up value-descending.)
   function pfIsOther(n) { return /other holdings/i.test(n.name || ''); }
-  var sankey = d3.sankey().nodeWidth(13).nodePadding(7).nodeAlign(d3.sankeyLeft)
+  var sankey = d3.sankey().nodeWidth(cfg.nodeWidth || 13).nodePadding(cfg.nodePadding != null ? cfg.nodePadding : 7).nodeAlign(alignFn)
     .nodeSort(function (a, b) { return (pfIsOther(a) - pfIsOther(b)) || ((b.value || 0) - (a.value || 0)); })
     .extent([[64, 30], [W - 220, H - 16]]);
   var graph;
@@ -312,7 +372,7 @@ function pfRenderSankey(key, s) {
   svg.append('g').selectAll('path').data(graph.links).enter().append('path')
     .attr('d', d3.sankeyLinkHorizontal()).attr('fill', 'none')
     .attr('stroke', function (d) { return cmap[d.source.name] || '#b0bec5'; })
-    .attr('stroke-opacity', 0.4)
+    .attr('stroke-opacity', (cfg.linkOpacity != null ? cfg.linkOpacity : 40) / 100)
     .attr('stroke-width', function (d) { return Math.max(1, d.width); })
     .append('title').text(function (d) { return d.source.name + ' → ' + d.target.name + ': ' + invFmtMoney(d.value); });
 
@@ -325,11 +385,14 @@ function pfRenderSankey(key, s) {
     .attr('stroke', '#fff').attr('stroke-width', 0.5)
     .append('title').text(function (d) { return d.name + ': ' + invFmtMoney(d.value); });
   node.append('text').attr('dy', '0.32em')
-    .attr('font-family', INV_FONT).attr('font-size', 10).attr('fill', '#333')
+    .attr('font-family', INV_FONT).attr('font-size', cfg.fontSize || 10).attr('fill', '#333')
     .attr('x', function (d) { return d.x0 < mid ? d.x0 - 5 : d.x1 + 5; })
     .attr('y', function (d) { return (d.y0 + d.y1) / 2; })
     .attr('text-anchor', function (d) { return d.x0 < mid ? 'end' : 'start'; })
-    .text(function (d) { return d.name.length > 36 ? d.name.slice(0, 34) + '…' : d.name; });
+    .text(function (d) {
+      var nm = d.name.length > 36 ? d.name.slice(0, 34) + '…' : d.name;
+      return cfg.showValues ? nm + ' · ' + invFmtMoney(d.value) : nm;
+    });
 }
 function pfExport(key, chart, kind) {
   var svg = document.getElementById('pf-' + chart + '-' + key); if (!svg) return;
