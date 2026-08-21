@@ -357,9 +357,14 @@ function pfRenderSankey(key, s) {
   // (== % of portfolio) descending. (Sources have no "other holdings", so the
   // left column just ends up value-descending.)
   function pfIsOther(n) { return /other holdings/i.test(n.name || ''); }
+  // Appending " · $X · Y%" widens the labels, so reserve more gutter on both
+  // sides when values are shown — otherwise the left (end-anchored) labels clip
+  // past x=0 and the right ones past x=W.
+  var leftPad = cfg.showValues ? 170 : 64;
+  var rightPad = cfg.showValues ? 250 : 220;
   var sankey = d3.sankey().nodeWidth(cfg.nodeWidth || 13).nodePadding(cfg.nodePadding != null ? cfg.nodePadding : 7).nodeAlign(alignFn)
     .nodeSort(function (a, b) { return (pfIsOther(a) - pfIsOther(b)) || ((b.value || 0) - (a.value || 0)); })
-    .extent([[64, 30], [W - 220, H - 16]]);
+    .extent([[leftPad, 30], [W - rightPad, H - 16]]);
   var graph;
   try {
     graph = sankey({ nodes: nodes.map(function (n) { return { name: n.name }; }), links: links });
@@ -369,6 +374,8 @@ function pfRenderSankey(key, s) {
     return;
   }
   var mid = W / 2;
+  // Grand total flow (== each side's total, since the graph is conserved), for %.
+  var grandTotal = links.reduce(function (a, l) { return a + (l.value || 0); }, 0);
   svg.append('g').selectAll('path').data(graph.links).enter().append('path')
     .attr('d', d3.sankeyLinkHorizontal()).attr('fill', 'none')
     .attr('stroke', function (d) { return cmap[d.source.name] || '#b0bec5'; })
@@ -391,7 +398,9 @@ function pfRenderSankey(key, s) {
     .attr('text-anchor', function (d) { return d.x0 < mid ? 'end' : 'start'; })
     .text(function (d) {
       var nm = d.name.length > 36 ? d.name.slice(0, 34) + '…' : d.name;
-      return cfg.showValues ? nm + ' · ' + invFmtMoney(d.value) : nm;
+      if (!cfg.showValues) return nm;
+      var pct = grandTotal ? (d.value / grandTotal * 100) : 0;
+      return nm + ' · ' + invFmtMoney(d.value) + ' · ' + pct.toFixed(1) + '%';
     });
 }
 function pfExport(key, chart, kind) {
