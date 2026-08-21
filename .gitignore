@@ -1,6 +1,7 @@
 *.xlsx
 *.clasp.json
 .DS_Store
+*.com.json
 
 # Google service-account key (never commit)
 service_account.json
