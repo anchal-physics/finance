@@ -26,10 +26,12 @@ personal/family finance workbook in Google Sheets). It does three things:
    year-specific aliases (`FED_TAX_2023`, `STATE_TAX_2024`, etc.).
 
 3. **Portfolio summary function** (`Stock.gs`) — custom function
-   `=GET_ALL_STOCK_SUMMARIES(...)` that does FIFO lot accounting over a
-   Robinhood-style transaction log on `Portfolio_AG` and emits a 2D
-   spilled array of `[ticker, totalShares, ltShares, stShares, ltAvgCost,
-   stAvgCost]` for each currently-held ticker.
+   `=GET_ALL_STOCK_SUMMARIES(accounts, dates, instruments, codes, quantities,
+   amounts)` that does FIFO lot accounting over a **multi-account** transaction
+   log on `Portfolio_AG`/`Portfolio_AA` and emits a 2D spilled array of
+   `[account, ticker, totalShares, ltShares, stShares, ltAvgCost, stAvgCost]`
+   for each currently-held **(account, ticker)** pair. IRA accounts report all
+   shares as long-term. The ledger itself is built by `build_transactions.py`.
 
 4. **Investment dashboard pages** (in the same web app) — two extra tabs,
    **Anchal** and **Anamika**, alongside the PayrollSankey landing tab.
@@ -58,7 +60,7 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 | ~~`Sankey.gs`~~ | **Deleted** (in git history at/before this point). Legacy copy/paste-to-sankeydiagram.net converter, superseded by `SankeyRenderer.gs`. Removed from `.clasp.json` `filePushOrder` too. | gone |
 | `Webapp.gs` | **Thin top-level combiner only**: `doGet` (routing), `include()`, and cross-feature server code shared by all tabs — print-to-PDF handoff (`storePrintSvg`/`servePrintPage_`), generic named settings (`getNamedSettings`/`saveNamedSettings`), reorder ack, and shared helpers (`setCellSmart_`, `moveRowOnSheet_`, `safeGetUserEmail_`). No feature logic. Add a feature ⇒ add a new `<Feature>.gs`; Webapp only routes. ~150 lines. | yes |
 | `PayrollSankey.gs` | Server for the PayrollSankey landing tab: bootstrap payload, snapshot/polling, cell writes, row add/delete/move (`moveSheetRow`), settings + subpanel locks, `getEffectiveRange_`, `addNewLevel`. | yes |
-| `Portfolio.gs` | Server for the portfolio-stats tabs. Config-driven `PORTFOLIOS_` (key → sheet name → label); `getPortfolioList()` + `getPortfolioStats(key)` read the computed summary columns (N:AF) of a `Portfolio_*` sheet. Add an investor = one `PORTFOLIOS_` entry. | yes |
+| `Portfolio.gs` | Server for the portfolio-stats tabs. Config-driven `PORTFOLIOS_` (key → sheet name → label); `getPortfolioList()` + `getPortfolioStats(key)` read the computed summary columns (`N` account/`O` ticker … `AC`–`AG` changes, `AN`–`AP` Sankey) of a `Portfolio_*` sheet, **aggregating by ticker across accounts** and excluding cash. Add an investor = one `PORTFOLIOS_` entry. | yes |
 | `Investment.gs` | Server for the Anchal/Anamika tabs: `computeInvestmentModel_`, `getInvestmentData`, editor endpoints (`getInvestmentEditor`, `writeInvestmentCell`, `addInvestmentStock`/`addInvestmentCategory`, `clearInvestmentRow`, `pollInvestment`), read-only/auto-fill column config, + investment-only helpers. | yes |
 | `WebappPage.html` | **Shell only** — `<head>`, topbar, tab nav, page containers, and the one `<script>` IIFE that stitches the client modules via `<?!= include('…') ?>`. The actual code lives in the partials below. | yes |
 | `Styles.html` | All CSS (the `<style>` block), included into `<head>`. | yes |
@@ -66,7 +68,7 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 | `CoreJs.html` | Shared client JS: bootstrap/state/constants, `PALETTES`, `escapeHtml`, `toast`, `serializeSvg`, `exportSvgStringToPng/Pdf`. | yes |
 | `PayrollSankeyJs.html` | PayrollSankey client JS: parser, renderer, subpanel editor, persistence, drag, polling, Sankey export. | yes |
 | `InvestmentJs.html` | Investment client JS: pie/bar SVG builders, legend, settings, editor, tab nav (generic — `PAGE_TITLES` + delegated `#tabs` handler), per-chart export, polling. | yes |
-| `PortfolioJs.html` | Portfolio-stats client JS: pie (holdings by value) + stats box, return-% bars with trailing-change line-style markers, dual-axis LT $/% bars. `pfInit()` builds tabs/pages from `getPortfolioList()`. | yes |
+| `PortfolioJs.html` | Portfolio-stats client JS: pie (holdings by value) + stats box, **3-level effective-holdings Sankey** (account → ticker → company, depth-based coloring) + a Sankey settings panel, return-% bars with trailing-change line-style markers, dual-axis LT $/% bars. `pfInit()` builds tabs/pages from `getPortfolioList()`. | yes |
 | `InitJs.html` | Initial-wiring block; **must be included last** (applies settings, first render, starts polling, `pfInit()`). | yes |
 | `PrintPage.html` | Print-to-PDF view — receives an SVG token, embeds the SVG full-page with `@media print` CSS, auto-opens the print dialog. | yes |
 
@@ -117,7 +119,8 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 > node --check /tmp/assembled.js
 > ```
 | `Tax.gs` | `FedTax`, `CATax`, year-specific aliases. Brackets for 2023/2024/2025 hardcoded. | yes |
-| `Stock.gs` | `GET_ALL_STOCK_SUMMARIES` FIFO lot-accounting function. | yes |
+| `Stock.gs` | `GET_ALL_STOCK_SUMMARIES` FIFO lot-accounting function (multi-account; account is the leftmost input & output col; IRA = all long-term). | yes |
+| `build_transactions.py` | Merges `data/*.csv` (Robinhood + Fidelity) into a per-person chronological ledger with an Account column in A; back-fills transfer-in cost basis via historical-close lookup. `--online` writes A–J surgically to `Portfolio_AG`/`AA`. See §4. | yes |
 | `appsscript.json` | Apps Script manifest: web-app config (`executeAs: USER_ACCESSING`, `access: ANYONE`), enables Sheets advanced service, declares OAuth scopes. | yes |
 | `.clasp.json` | Local clasp config — contains the bound Script ID. | yes |
 | `.claspignore` | Denylist mode (push everything except specific noise). | yes |
@@ -158,6 +161,16 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
    Apps Script editor → Project Settings → Script ID).
 
 ### Every push from now on
+
+> **⚠️ Claude: do NOT run `clasp push` / `clasp deploy` / `./deploy.sh` locally.**
+> The user wants ALL deploys to go through the **GitHub CI on push to `main`**
+> (`.github/workflows/deploy-webapp.yml`), so the mechanism stays tied to the
+> repo (survives switching computers) and there's one source of truth. Make +
+> verify changes locally (`node --check`, synthetic tests), then hand off for the
+> user to commit & push; the CI deploys. (Data-only scripts that write to the
+> Sheet via the service account — `build_transactions.py`, `update_effective_holdings.py`
+> `--online` — are fine to run; they're not clasp deploys.) The manual commands
+> below are retained for reference / the user's own use.
 
 ```bash
 cd ~/Git/anchal-physics/finance
@@ -297,64 +310,115 @@ existing formulas keep working after the `Tax.gs` rebuild because the
 year-specific aliases (`FED_TAX_2023` → `FedTax(income, 2023, 'single')`)
 are preserved.
 
-### Sheet: Portfolio_AG
+### Sheet: Portfolio_AG (and Portfolio_AA)
 
-Robinhood transaction history.
+**MULTI-ACCOUNT transaction ledger.** No longer Robinhood-only — it merges
+every brokerage CSV in `data/` for one person (Anchal → `Portfolio_AG`,
+Anamika → `Portfolio_AA`) into one chronological ledger, produced by
+**`build_transactions.py`** (see below).
 
-- Cols A–K = raw transactions (one row each):
-  A=Activity Date, B=Process Date, C=Settle Date, D=Instrument,
-  E=Description, F=Trans Code, G=Quantity, H=Price, I=Amount,
-  J=(blank), K=Closing Price
-- Cell **N1** contains:
-  `=GET_ALL_STOCK_SUMMARIES($C$2:C1000, $D$2:$D1000, $F$2:$F1000, $G$2:$G1000, $I$2:I1000, $K$2:$K1000)`
-  which spills a 6-column array into N:S. **Row 1 of the spill is a HEADER**
-  (`Ticker / Total Shares / LT Shares / ST Shares / LT Avg Cost/Share /
-  ST Avg Cost/Share`); data starts on the second spilled row, one row per
-  currently-held ticker.
-- Cols T–V (Total Cost, Price via `GOOGLEFINANCE`, Total Current Value)
-  are pre-filled formulas anchored to the spilled rows. ⚠️ Because the header
-  row was added, these must be shifted DOWN one row to stay aligned with the
-  data (the header pushed every data row down by one).
+- Cols A–J = raw transactions, one row each, newest-first:
+  **A=Account** (new leftmost col), B=Activity Date, C=Process Date,
+  D=Settle Date, E=Instrument, F=Description, G=Trans Code, H=Quantity,
+  I=Price, J=Amount.
+- **Col K = `Closing Price` is DEAD** — a leftover from the old single-account
+  layout, no longer read or maintained. `Stock.gs` used to use it as a
+  cost-basis fallback; that's gone (transfer-in basis is back-filled into
+  Amount instead, see below). Don't reintroduce a dependency on it.
+- Cell **N1** contains (columns after the account shift):
+  `=GET_ALL_STOCK_SUMMARIES($A$2:A, $D$2:D, $E$2:E, $G$2:G, $H$2:H, $J$2:J)`
+  args = account, settle date, instrument, trans code, quantity, amount.
+  It spills a **7-column** array into **N:T** (header row 1):
+  `Account / Ticker / Total Shares / LT Shares / ST Shares / LT Avg Cost/Share /
+  ST Avg Cost/Share`, **one row per (account, ticker)** — the same ticker in two
+  accounts is two rows, sorted by account then ticker.
+- Downstream computed columns (user-maintained formulas anchored to the spill):
+  `U` Total Cost · `V` Price (`GOOGLEFINANCE`) · `W` Total Current Value ·
+  `X` Total LT Value · `Y` Total ST Value · `Z` Possible Long Term Profit ($) ·
+  `AA` Possible Simple Profit % · `AB` Ticker (helper) · `AC`–`AG` trailing %
+  changes (1w/4w/12w/6m/1y). ⚠️ These letters moved right when the Account
+  column was added (spill grew 6→7 cols) plus an earlier one-column insert; if
+  the layout shifts again, update `Portfolio.gs` `PF_COLS` and
+  `update_effective_holdings.py` together.
 
-**Quantity is UNSIGNED** in this export — both Buy and Sell rows are positive.
-Direction comes from **Trans Code**, not the sign: `Buy`/`ACATI` (transfer in)
-add shares, `Sell` removes them (FIFO); any other share-moving code falls back
-to the sign of Amount (positive Amount = cash in = disposal). Zero-quantity
-rows (`CDIV`, `ACH`, `DCF`, `SLIP`) are ignored. (⚠️ This corrects an earlier
-wrong assumption — "positive = add, negative = remove" — that treated every
-`Sell` as a buy; it only surfaced on a fully-sold ticker like NVDA. Regression
-check: a ticker bought-then-fully-sold must be ABSENT from the output.)
-Cost basis preference: `|Amount|` if non-zero, else `Quantity * Closing Price`.
-**Stock splits (`Trans Code = SPL`)**: the SPL row's Quantity is the NEW TOTAL
-shares after the split (not a delta — verified: VUG 17.39→86.93 = 5:1, SCHB
-20.97→41.93 = 2:1). `Stock.gs` scales every existing lot by
-`newTotal/currentTotal`, dividing per-share cost by the same ratio, so total
-cost basis and each lot's acquisition date (holding period) are preserved.
+**IRA vs taxable** (`Stock.gs`): the account label decides the LT/ST split.
+Taxable accounts (no "IRA" in the label) do the normal FIFO holding-period
+split; **IRA accounts** (label contains "IRA", case-insensitive) report ALL
+remaining shares as long-term (ST = 0) — still one row per account.
+
+**Quantity is UNSIGNED** — both Buy and Sell rows are positive. Direction comes
+from **Trans Code**, not the sign: `Buy`/`ACATI` (transfer in) add shares,
+`Sell` removes them (FIFO); any other share-moving code falls back to the sign
+of Amount (positive Amount = cash in = disposal). Zero-quantity rows (`CDIV`,
+`ACH`, `DCF`, `SLIP`, …) are ignored. Regression check: a ticker
+bought-then-fully-sold must be ABSENT from the output. **Cost basis = `|Amount|`**
+(no closing-price fallback anymore). **Stock splits (`SPL`)**: ⚠️ the SPL row's
+Quantity is the number of shares **ADDED** by the split (a **DELTA**), NOT the
+new total. So `newTotal = current + delta` and `Stock.gs` scales every lot by
+`ratio = (current + delta) / current`, dividing per-share cost by the same ratio
+(preserves total basis + acquisition dates). **This corrects an earlier wrong
+assumption** ("Quantity == new total") that silently dropped the entire
+pre-split position from every split holding — e.g. SCHB read 50.42 vs Robinhood's
+71.39 (short by the pre-split 20.965). Verified against the app's live counts:
+SCHB `20.965 + 41.930 → 62.895` (3:1), VUG → 6:1, MGK → 5:1. (The old examples
+"SCHB 2:1 / VUG 5:1, new total" were the same mistake — those numbers are
+deltas; the true ratios are 3:1 / 6:1.)
+
+**Money-market cash** (`SPAXX`, `FDRXX`, …) is excluded from holdings in both
+`Portfolio.gs` and `update_effective_holdings.py` (it's a cash sweep, not a
+position).
 
 **Portfolio-stats page** (`Portfolio.gs` + `PortfolioJs.html`, tab "Anchal
-Portfolio"). Reads the computed columns to the right of the spill:
-`N` ticker · `T` cost · `U` price · `V` current value · `Y` LT profit $ ·
-`Z` LT profit % (fraction) · `AB`–`AF` trailing % changes (1w/4w/12w/6m/1y) ·
-`AM`–`AO` effective-holdings **Sankey flow block** (`Source | Value | Target`,
-header row 1) written by `update_effective_holdings.py`.
-Four panels: (1) pie of holdings by `V` + a stats box (total value / $ profit /
-% profit); (2) **effective-holdings Sankey** (`pfRenderSankey`, d3-sankey) —
-left nodes = original positions (coloured to match the pie), right nodes = the
-look-through companies + `"<ETF> — other holdings"` residuals + a folded "Other
-holdings"; reads `stats.flows` from `AM:AO`; empty until the script has pushed
-data; (3) return-% bars (`(V−T)/T`) per holding with **trailing-change markers**
-as distinct line styles — 1w dotted, 4w dashed, 12w dash-dot, 6m long-dash,
-1y solid (one neutral color, legend at top, no in-place labels); (4) LT
-capital-gain profit as dual-axis bars ($ left, % right; excludes 0/empty).
-**Each stock keeps a stable color** (value-sorted index into the `nested`
-palette) across the pie, the Sankey's source nodes, and the bar charts.
-Config-driven: add `Portfolio_AA` for Anamika by adding one `PORTFOLIOS_` entry
-— the client builds the tab + page from `getPortfolioList()`.
+Portfolio"). Reads the computed columns: `N` account · `O` ticker · `U` cost ·
+`V` price · `W` current value · `Z` LT profit $ · `AA` profit % (fraction) ·
+`AC`–`AG` trailing % changes · `AN`–`AP` effective-holdings **Sankey flow block**
+(`Source | Value | Target`, header row 1) written by
+`update_effective_holdings.py`. Because tickers now repeat across accounts, the
+server **aggregates by ticker across accounts** for the pie/return/LT panels
+(one slice per ticker, portfolio-wide) — the per-account breakdown lives ONLY in
+the Sankey. Four panels: (1) pie of holdings by value + stats box; (2)
+**effective-holdings Sankey** (`pfRenderSankey`, d3-sankey) — now **THREE
+levels**: account (left, distinct dark colors) → ticker (middle, stable ticker
+color) → effective company (right, grey) + `"<ETF> — other holdings"` residuals
++ a folded "Other holdings"; coloring/labels are **depth-based** (depth 0/1/2),
+% is relative to the portfolio total; reads `stats.flows` from `AN:AP`, empty
+until the script has run; (3) return-% bars (`(V−cost)/cost`) with trailing-change
+markers (1w dotted / 4w dashed / 12w dash-dot / 6m long-dash / 1y solid); (4) LT
+capital-gain profit dual-axis bars ($ left, % right; excludes 0/empty) — NOTE
+this sums each ticker's LT profit across accounts, so IRA gains are lumped in
+with taxable-LT gains. **Each ticker keeps a stable color** (value-sorted index
+into the `nested` palette) across the pie, the Sankey's ticker nodes, and the
+bars. A **Sankey settings** panel (collapsible, below panel 2) tunes node
+width/padding/row height/link opacity/font/alignment/show-$ — persisted per-user
+via the shared `wireSettingsPanel()` in `CoreJs` (key `pf:<key>`).
+Config-driven: add a portfolio by adding one `PORTFOLIOS_` entry.
 
-The `AM:AO` flow data comes from the local **`update_effective_holdings.py`**
-(`--online`), which decomposes ETFs via `yahooquery` and surgically writes the
-Sankey block (and a `AQ:AS` summary). See `SERVICE_ACCOUNT_SETUP.md` and the
-`.github/workflows/update-holdings.yml` manual Action.
+The `AN:AP` flow data comes from **`update_effective_holdings.py`** (`--online`),
+which reads the summary (`N` account / `O` ticker / `W` value), decomposes ETFs
+via `yahooquery`, and surgically writes the 3-level Sankey block (`account →
+ticker`, `ticker → company`) + an `AR:AT` summary. `EFF_SANKEY_COL`/
+`EFF_SUMMARY_COL` env defaults are `AN`/`AR`. See `SERVICE_ACCOUNT_SETUP.md` and
+`.github/workflows/update-holdings.yml`.
+
+### `build_transactions.py` — the transaction merge script
+
+Scans `data/*.csv`, auto-detects format per file (Robinhood — already matches
+A–I; or **Fidelity** — `Run Date / Action / Symbol / … / Amount ($) /
+Settlement Date`, direction from the `Action` text mapped to RH-style Trans
+Codes), tags each row with an **Account label derived from the filename**
+(`<Broker> {Investment | Roth IRA | Trad. IRA}`; "IRA" in the label ⇒ IRA
+account), merges chronologically per person, dedupes overlapping date-range
+boundaries, and writes the ledger to A–J (account in A). Data starts row 2, no
+gap. **Transfer-in (`ACATI`) rows** arrive with shares but no dollar
+Amount/Price — the script **back-fills Amount = shares × historical close**
+(yahooquery lookup on the transfer date), so every lot has a real cost basis and
+column K is unnecessary. Modes: default = local preview CSVs in `data/merged/`;
+`--dry-run` = print only; `--online` = surgical write to A–J on the Google Sheet
+(guarded: refuses unless A1 is `Activity Date`/`Account`; leaves K and everything
+from L rightward untouched). Needs `FINANCE_SHEET_ID` + `service_account.json`
+(same creds as the holdings script); run with the conda `finance` env's python.
+⚠️ Filenames' date ranges are account-*open* dates, not first-transaction dates
+(Anchal's RH data actually starts 2024, not the "2016" in the name).
 
 ### Sheet: Investment
 
@@ -613,6 +677,12 @@ Things Anchal has demonstrated through conversation:
 - ~~**Sankey.gs (legacy)**~~ **Deleted** — superseded by `SankeyRenderer.gs`
   and preserved in git history. Also removed from `.clasp.json`.
 - ~~**migrate.sh**~~ **Deleted** — migration to this repo is complete.
+- **Portfolio pie/bars aggregate across accounts by ticker.** The per-account
+  split shows only in the Sankey. Two known-and-accepted simplifications the user
+  may want to revisit: (a) the **LT-profit dual-axis panel sums each ticker's LT
+  profit across accounts**, lumping (non-taxable) IRA gains in with taxable-LT
+  gains; (b) there's no per-account pie/bar view. Both are easy to split later if
+  asked.
 - **Conflict-resolution UI** during external-edit polling is basic
   (banner with Keep mine / Take sheet version). Could be improved
   with a cell-level diff view if it gets used heavily.
@@ -644,14 +714,9 @@ If you've never seen this repo before, do this:
    cd ~/Git/anchal-physics/finance
    for f in *.gs; do cp "$f" /tmp/x.js && node --check /tmp/x.js && echo "$f: OK" || echo "$f: FAIL"; done
    ```
-6. When you make changes, push with:
-   ```bash
-   clasp push --force
-   ```
-7. If clasp output says it's about to *delete* a remote file, STOP
-   and verify — `.claspignore` is in denylist mode, so this shouldn't
-   happen, but if it does it means a remote-only file appeared and
-   should probably be pulled first (`clasp pull`).
+6. When you make changes, DON'T deploy them yourself — verify locally, then
+   hand off for the user to commit & push to `main`; the **GitHub CI deploys**
+   (see §3). Do not run `clasp push`/`clasp deploy`/`./deploy.sh` locally.
 
 Welcome aboard. Anchal is a good user to work with — direct, technical,
 makes decisions fast. Match the energy.
