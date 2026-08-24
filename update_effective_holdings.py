@@ -4,17 +4,21 @@ update_effective_holdings.py
 ------------------------------------------------------------------------------
 Look-through portfolio exposure.
 
-For each Portfolio_* sheet it reads N (ticker), O (shares) and V (current
-value), decomposes every ETF position into its underlying holdings (via
-yahooquery), and writes TWO surgical blocks on the SAME sheet:
+The portfolio summary is now MULTI-ACCOUNT: GET_ALL_STOCK_SUMMARIES emits one
+row per (account, ticker). For each Portfolio_* sheet this reads N (account),
+O (ticker) and W (current value), decomposes every ETF position into its
+underlying holdings (via yahooquery), and writes TWO surgical blocks on the
+SAME sheet:
 
-  SANKEY flows  → AM (Source) | AN (Value $) | AO (Target)
-      One row per edge: original position (ETF/stock) → effective holding.
+  SANKEY flows  → AN (Source) | AO (Value $) | AP (Target)
+      A THREE-LEVEL graph, one row per edge:
+        account → ticker      (that account's position value)
+        ticker  → effective holding (look-through company / residual)
       Capuchin reads this block to draw the effective-holdings Sankey panel.
       All but the top EFF_TOP_TARGETS companies fold into an "Other holdings"
       node; each ETF's un-decomposed remainder is a "<ETF> — other holdings"
-      target so dollars reconcile.
-  SUMMARY table → AQ (Holding) | AR (Value $) | AS (% of portfolio, a FRACTION)
+      target so dollars reconcile. (Account→ticker edges are never folded.)
+  SUMMARY table → AR (Holding) | AS (Value $) | AT (% of portfolio, a FRACTION)
       The flat effective-holdings table (kept for reference).
 
 Both blocks have a header row. Only those columns are cleared + rewritten;
@@ -55,8 +59,8 @@ SHEETS = os.environ.get("EFF_SHEETS", "Portfolio_AG,Portfolio_AA").split(",")
 #   SANKEY  : Source | Value | Target  — one row per flow edge (Capuchin reads
 #             this to draw the effective-holdings Sankey panel).
 #   SUMMARY : Holding | Value ($) | %   — the flat effective-holdings table.
-SANKEY_START_COL = os.environ.get("EFF_SANKEY_COL", "AM")    # → AM, AN, AO
-SUMMARY_START_COL = os.environ.get("EFF_SUMMARY_COL", "AQ")  # → AQ, AR, AS
+SANKEY_START_COL = os.environ.get("EFF_SANKEY_COL", "AN")    # → AN, AO, AP
+SUMMARY_START_COL = os.environ.get("EFF_SUMMARY_COL", "AR")  # → AR, AS, AT
 try:
     TOP_TARGETS = int(os.environ.get("EFF_TOP_TARGETS") or 24)   # distinct right nodes; rest → "Other holdings"
 except ValueError:
@@ -64,6 +68,7 @@ except ValueError:
 
 MAX_SCAN_ROW = 300          # portfolio positions never exceed this row
 RESIDUAL_MIN_FRAC = 0.002   # ignore an ETF's residual if < 0.2% of the position
+CASH_TICKERS = {"SPAXX", "FDRXX", "FZFXX", "SPRXX", "VMFXX"}  # money-market sweeps → not holdings
 
 
 # ============================ shared helpers ============================
@@ -117,7 +122,7 @@ def fetch_lookthrough(tickers):
 
 def build_effective(positions, holdings, names):
     eff = OrderedDict()   # key -> {name, value}
-    total = sum((p["value"] or 0) for p in positions)
+    total = sum((p["value"] or 0) for p in positions if p["ticker"].upper() not in CASH_TICKERS)
 
     def add(key, name, val):
         if key not in eff:
@@ -126,7 +131,7 @@ def build_effective(positions, holdings, names):
 
     for p in positions:
         t, val = p["ticker"], (p["value"] or 0)
-        if val <= 0:
+        if val <= 0 or t.upper() in CASH_TICKERS:
             continue
         hs = holdings.get(t)
         if hs:  # ETF → distribute across underlyings; remainder → residual line
@@ -158,13 +163,16 @@ def summary_table(rows):
 
 
 def build_flows(positions, holdings, names, top_k):
-    """Sankey edges: each original position (ETF/stock) → each effective holding.
-    Returns a list of (source, value, target) tuples, aggregated by (source,
-    target), with all but the top-`top_k` target companies folded into a single
-    'Other holdings' node so the diagram stays readable."""
-    edges = OrderedDict()   # (source, tkey) -> value
-    tname = {}              # tkey -> display name
-    tvalue = {}             # tkey -> total value (for top-k ranking)
+    """Three-level Sankey edges as (source, value, target) tuples:
+        LEVEL 1  account → ticker            (that account's position value)
+        LEVEL 2  ticker  → effective holding (look-through company / residual)
+    Level-2 edges are aggregated across accounts by (ticker, target); all but
+    the top-`top_k` target companies fold into one 'Other holdings' node so the
+    diagram stays readable. Level-1 (account→ticker) edges are never folded."""
+    acct_edges = OrderedDict()   # (account, ticker) -> value   (level 1)
+    edges = OrderedDict()        # (ticker, tkey)    -> value   (level 2)
+    tname = {}                   # tkey -> display name
+    tvalue = {}                  # tkey -> total value (for top-k ranking)
 
     def add(source, tkey, tnm, val):
         edges[(source, tkey)] = edges.get((source, tkey), 0.0) + val
@@ -173,8 +181,10 @@ def build_flows(positions, holdings, names, top_k):
 
     for p in positions:
         t, val = p["ticker"], (p["value"] or 0)
-        if val <= 0:
+        if val <= 0 or t.upper() in CASH_TICKERS:
             continue
+        acct = (p.get("account") or "Unknown").strip() or "Unknown"
+        acct_edges[(acct, t)] = acct_edges.get((acct, t), 0.0) + val
         hs = holdings.get(t)
         if hs:  # ETF → one edge per underlying + a residual edge
             allocated = 0.0
@@ -187,17 +197,23 @@ def build_flows(positions, holdings, names, top_k):
             resid = val * max(0.0, 1.0 - allocated)
             if resid > RESIDUAL_MIN_FRAC * val:
                 add(t, "{}::other".format(t), "{} — other holdings".format(t), resid)
-        else:   # direct stock → itself
-            add(t, t, names.get(t, t), val)
+        else:   # direct stock → itself (skip if the company name == ticker to
+                # avoid a self-loop; then the ticker node is simply terminal)
+            comp = names.get(t, t)
+            if comp and comp != t:
+                add(t, "direct::{}".format(t), comp, val)
 
     keep = set(sorted(tvalue, key=lambda k: -tvalue[k])[:top_k])
-    agg = OrderedDict()     # (source, target_label) -> value
+    agg = OrderedDict()     # (ticker, target_label) -> value
     for (source, tkey), val in edges.items():
         label = tname[tkey] if tkey in keep else "Other holdings"
         agg[(source, label)] = agg.get((source, label), 0.0) + val
 
-    flows = [(s, round(v, 2), tl) for (s, tl), v in agg.items() if v > 0]
-    flows.sort(key=lambda e: (-e[1], e[0]))   # largest edges first
+    # Level 1 first (account→ticker), each level largest-edge-first.
+    flows = [(a, round(v, 2), t) for (a, t), v in
+             sorted(acct_edges.items(), key=lambda e: (-e[1], e[0][0])) if v > 0]
+    flows += [(s, round(v, 2), tl) for (s, tl), v in
+              sorted(agg.items(), key=lambda e: (-e[1], e[0][0])) if v > 0]
     return flows
 
 
@@ -223,17 +239,20 @@ def print_preview(name, rows, total, flows):
 
 # ============================ local (.xlsx) backend ============================
 def read_positions_xlsx(ws):
+    # Summary spill: N Account | O Ticker | P Total Shares | ... | W Value.
     out = []
     for row in range(2, MAX_SCAN_ROW + 1):
-        tk = ws["N{}".format(row)].value
+        acct = ws["N{}".format(row)].value
+        tk = ws["O{}".format(row)].value
         if tk is None or str(tk).strip() == "":
-            break  # the N spill is contiguous; stop at the first blank
+            break  # the spill is contiguous; stop at the first blank ticker
         tk = str(tk).strip()
         if "#REF" in tk:
             continue
-        out.append({"ticker": tk,
-                    "shares": to_float(ws["O{}".format(row)].value),
-                    "value": to_float(ws["V{}".format(row)].value)})
+        out.append({"account": str(acct or "").strip(),
+                    "ticker": tk,
+                    "shares": to_float(ws["P{}".format(row)].value),
+                    "value": to_float(ws["W{}".format(row)].value)})
     return out
 
 
@@ -355,8 +374,8 @@ def run_local(path, sheets, dry_run):
             print("    sheet not found — skipping")
             continue
         ws = wb_r[name]
-        if str(ws["N1"].value or "").strip() != "Ticker":
-            print("    N1 is not 'Ticker' → not a portfolio-summary layout; skipping.")
+        if str(ws["N1"].value or "").strip() != "Account":
+            print("    N1 is not 'Account' → not a portfolio-summary layout; skipping.")
             continue
         positions = read_positions_xlsx(ws)
         tickers = sorted({p["ticker"] for p in positions})
@@ -416,12 +435,16 @@ def run_online(sheets, dry_run):
         except gspread.WorksheetNotFound:
             print("    sheet not found — skipping")
             continue
-        if (ws.acell("N1").value or "").strip() != "Ticker":
-            print("    N1 is not 'Ticker' → skipping (won't clobber data).")
+        if (ws.acell("N1").value or "").strip() != "Account":
+            print("    N1 is not 'Account' → skipping (won't clobber data).")
             continue
-        positions = [{"ticker": r[0].strip(), "shares": to_float(r[1]) if len(r) > 1 else None,
-                      "value": to_float(r[8]) if len(r) > 8 else None}
-                     for r in ws.get("N2:V{}".format(MAX_SCAN_ROW)) if r and r[0] and "#REF" not in r[0]]
+        # Spill: N Account | O Ticker | P Shares | Q | R | S | T | U | V | W Value
+        positions = [{"account": (r[0] or "").strip(),
+                      "ticker": r[1].strip(),
+                      "shares": to_float(r[2]) if len(r) > 2 else None,
+                      "value": to_float(r[9]) if len(r) > 9 else None}
+                     for r in ws.get("N2:W{}".format(MAX_SCAN_ROW))
+                     if r and len(r) > 1 and r[1] and "#REF" not in r[1]]
         tickers = sorted({p["ticker"] for p in positions})
         if not tickers:
             print("    no positions found")

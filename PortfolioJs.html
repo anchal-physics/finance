@@ -24,6 +24,9 @@ function pfMergeSettings(saved) {
 
 function pfPalette() { return PALETTES['nested'] || PALETTES['cat10']; }
 function pfColor(i) { var p = pfPalette(); return p[i % p.length]; }
+// Distinct, deliberately dark colors for the Sankey's leftmost account column
+// (kept clear of the ticker palette so accounts read as their own level).
+var PF_ACCT_COLORS = ['#2D4C36', '#6d4c41', '#37474f', '#4527a0', '#00695c', '#827717', '#5d4037', '#1a3a5c'];
 function pfIsDark(c) { return (typeof invIsDark === 'function') ? invIsDark(c) : false; }
 
 // ---------- Panel 1: pie of holdings by value ----------
@@ -352,15 +355,14 @@ function pfRenderSankey(key, s) {
     .attr('font-family', INV_FONT).attr('font-size', 15).attr('font-weight', 700).attr('fill', '#1f1f1f')
     .text(s.label + ' — effective holdings (look-through)');
 
-  // Order each column top→bottom: real individual stocks first, then the
-  // "<ETF> — other holdings" / "Other holdings" buckets — each group by value
-  // (== % of portfolio) descending. (Sources have no "other holdings", so the
-  // left column just ends up value-descending.)
+  // Order each column top→bottom: real nodes first, then the "<ETF> — other
+  // holdings" / "Other holdings" buckets, each group by value descending. (The
+  // account and ticker columns have no "other holdings", so they just end up
+  // value-descending.)
   function pfIsOther(n) { return /other holdings/i.test(n.name || ''); }
-  // Appending " · $X · Y%" widens the labels, so reserve more gutter on both
-  // sides when values are shown — otherwise the left (end-anchored) labels clip
-  // past x=0 and the right ones past x=W.
-  var leftPad = cfg.showValues ? 170 : 64;
+  // Left column is now the (long-named) account nodes, so it always needs a
+  // wide gutter; appending " · $X · Y%" widens it further when values are shown.
+  var leftPad = cfg.showValues ? 240 : 150;
   var rightPad = cfg.showValues ? 250 : 220;
   var sankey = d3.sankey().nodeWidth(cfg.nodeWidth || 13).nodePadding(cfg.nodePadding != null ? cfg.nodePadding : 7).nodeAlign(alignFn)
     .nodeSort(function (a, b) { return (pfIsOther(a) - pfIsOther(b)) || ((b.value || 0) - (a.value || 0)); })
@@ -373,12 +375,35 @@ function pfRenderSankey(key, s) {
       .attr('font-family', INV_FONT).attr('font-size', 13).text('Sankey layout error: ' + e.message);
     return;
   }
-  var mid = W / 2;
-  // Grand total flow (== each side's total, since the graph is conserved), for %.
-  var grandTotal = links.reduce(function (a, l) { return a + (l.value || 0); }, 0);
+  // Column semantics from the graph: depth 0 = account, 1 = ticker,
+  // 2 = effective company. Color/label by depth (not an x<mid split), since the
+  // graph now has three levels.
+  var maxDepth = 0;
+  graph.nodes.forEach(function (n) { if (n.depth > maxDepth) maxDepth = n.depth; });
+  // % is relative to the portfolio total (== sum of the account nodes), not the
+  // total link flow (which double-counts across the two levels).
+  var portfolioTotal = graph.nodes.reduce(function (a, n) { return a + (n.depth === 0 ? (n.value || 0) : 0); }, 0);
+  // Assign each account (left column) a distinct dark color.
+  var acctColors = {}, ai = 0;
+  graph.nodes.filter(function (n) { return n.depth === 0; })
+    .sort(function (a, b) { return (b.value || 0) - (a.value || 0); })
+    .forEach(function (n) { acctColors[n.name] = PF_ACCT_COLORS[ai % PF_ACCT_COLORS.length]; ai++; });
+  function nodeFill(d) {
+    if (d.depth === 0) return acctColors[d.name] || '#455a64';   // account
+    if (d.depth === 1) return cmap[d.name] || '#607d8b';         // ticker
+    return '#cfd8dc';                                            // effective company
+  }
+  // A link touches a ticker on exactly one side (account→ticker or ticker→company);
+  // color it by that ticker so a holding keeps its color across both levels.
+  function linkColor(d) {
+    var tk = d.source.depth === 1 ? d.source.name : (d.target.depth === 1 ? d.target.name : null);
+    return (tk && cmap[tk]) || acctColors[d.source.name] || '#b0bec5';
+  }
+  function labelLeft(d) { return d.depth === 0; }   // accounts label left; ticker/company label right
+
   svg.append('g').selectAll('path').data(graph.links).enter().append('path')
     .attr('d', d3.sankeyLinkHorizontal()).attr('fill', 'none')
-    .attr('stroke', function (d) { return cmap[d.source.name] || '#b0bec5'; })
+    .attr('stroke', linkColor)
     .attr('stroke-opacity', (cfg.linkOpacity != null ? cfg.linkOpacity : 40) / 100)
     .attr('stroke-width', function (d) { return Math.max(1, d.width); })
     .append('title').text(function (d) { return d.source.name + ' → ' + d.target.name + ': ' + invFmtMoney(d.value); });
@@ -388,18 +413,18 @@ function pfRenderSankey(key, s) {
     .attr('x', function (d) { return d.x0; }).attr('y', function (d) { return d.y0; })
     .attr('width', function (d) { return Math.max(1, d.x1 - d.x0); })
     .attr('height', function (d) { return Math.max(1, d.y1 - d.y0); })
-    .attr('fill', function (d) { return d.x0 < mid ? (cmap[d.name] || '#607d8b') : '#cfd8dc'; })
+    .attr('fill', nodeFill)
     .attr('stroke', '#fff').attr('stroke-width', 0.5)
     .append('title').text(function (d) { return d.name + ': ' + invFmtMoney(d.value); });
   node.append('text').attr('dy', '0.32em')
     .attr('font-family', INV_FONT).attr('font-size', cfg.fontSize || 10).attr('fill', '#333')
-    .attr('x', function (d) { return d.x0 < mid ? d.x0 - 5 : d.x1 + 5; })
+    .attr('x', function (d) { return labelLeft(d) ? d.x0 - 5 : d.x1 + 5; })
     .attr('y', function (d) { return (d.y0 + d.y1) / 2; })
-    .attr('text-anchor', function (d) { return d.x0 < mid ? 'end' : 'start'; })
+    .attr('text-anchor', function (d) { return labelLeft(d) ? 'end' : 'start'; })
     .text(function (d) {
       var nm = d.name.length > 36 ? d.name.slice(0, 34) + '…' : d.name;
       if (!cfg.showValues) return nm;
-      var pct = grandTotal ? (d.value / grandTotal * 100) : 0;
+      var pct = portfolioTotal ? (d.value / portfolioTotal * 100) : 0;
       return nm + ' · ' + invFmtMoney(d.value) + ' · ' + pct.toFixed(1) + '%';
     });
 }
