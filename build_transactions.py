@@ -40,9 +40,15 @@ etc. — are left exactly as-is). A guard refuses to write unless A1 currently
 reads "Activity Date" or "Account". You re-point the GET_ALL_STOCK_SUMMARIES
 formula to the shifted columns yourself.
 
-Requirements:  pip install gspread   (only for --online)
+Data source:  by default reads local data/*.csv. If TX_DRIVE_FOLDER (or
+              --drive-folder <id>) is set, it instead downloads the CSVs from
+              that Google Drive folder (shared with the service account) into a
+              temp dir and merges those — so you can just drop files in Drive.
+
+Requirements:  gspread / google-auth (already in requirements.txt).
 Online setup:  service_account.json + the sheet shared with it + FINANCE_SHEET_ID
-               (same credentials as update_effective_holdings.py).
+               (same credentials as update_effective_holdings.py). Put local
+               values in a gitignored `.env` (see .env.example).
 ------------------------------------------------------------------------------
 """
 import os
@@ -54,11 +60,30 @@ import argparse
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-# ---- config (environment variables override these) ----
+def _load_local_env(path=None):
+    """Load KEY=VALUE lines from a gitignored `.env` next to this script into
+    os.environ WITHOUT overriding values already set (so real env / CI wins)."""
+    path = path or os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(path):
+        return
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_local_env()
+
+# ---- config (environment variables override these; see .env / .env.example) ----
 DATA_DIR = os.environ.get("TX_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 OUT_DIR = os.environ.get("TX_OUT_DIR", os.path.join(DATA_DIR, "merged"))
 SPREADSHEET_ID = os.environ.get("FINANCE_SHEET_ID", "PUT-SPREADSHEET-ID-HERE")
 SERVICE_ACCOUNT_FILE = os.environ.get("GSPREAD_SA_FILE", "service_account.json")
+DRIVE_FOLDER_ID = os.environ.get("TX_DRIVE_FOLDER", "")   # if set, read CSVs from Drive
+QUIET = False   # set by --quiet: trim output / hide ids (public CI logs)
 
 PERSON_SHEET = {"Anchal": "Portfolio_AG", "Anamika": "Portfolio_AA"}
 
@@ -361,6 +386,59 @@ def to_matrix(rows):
     return out
 
 
+def download_drive_csvs(folder_id):
+    """Download every CSV in a Google Drive folder (shared with the service
+    account) into a fresh temp dir and return its path. Uses google-auth only
+    (no google-api-python-client needed). Native Google Sheets are exported to
+    CSV; raw text/csv files are downloaded as-is."""
+    import tempfile
+    from google.oauth2.service_account import Credentials
+    from google.auth.transport.requests import AuthorizedSession
+    if not os.path.exists(SERVICE_ACCOUNT_FILE):
+        sys.exit("Service-account key not found: {}".format(SERVICE_ACCOUNT_FILE))
+    creds = Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+    sess = AuthorizedSession(creds)
+
+    files, page = [], None
+    while True:
+        params = {"q": "'{}' in parents and trashed=false".format(folder_id),
+                  "fields": "nextPageToken,files(id,name,mimeType)",
+                  "pageSize": 200, "includeItemsFromAllDrives": True, "supportsAllDrives": True}
+        if page:
+            params["pageToken"] = page
+        r = sess.get("https://www.googleapis.com/drive/v3/files", params=params)
+        r.raise_for_status()
+        j = r.json()
+        files += j.get("files", [])
+        page = j.get("nextPageToken")
+        if not page:
+            break
+
+    dest = tempfile.mkdtemp(prefix="tx_drive_")
+    n = 0
+    for f in files:
+        name, fid, mt = f["name"], f["id"], f.get("mimeType", "")
+        if mt == "text/csv" or name.lower().endswith(".csv"):
+            url = "https://www.googleapis.com/drive/v3/files/{}?alt=media".format(fid)
+        elif mt == "application/vnd.google-apps.spreadsheet":
+            url = "https://www.googleapis.com/drive/v3/files/{}/export?mimeType=text/csv".format(fid)
+            if not name.lower().endswith(".csv"):
+                name += ".csv"
+        else:
+            continue
+        rr = sess.get(url, params={"supportsAllDrives": True})
+        rr.raise_for_status()
+        with open(os.path.join(dest, name), "wb") as out:
+            out.write(rr.content)
+        n += 1
+    if QUIET:
+        print("Downloaded {} CSV(s) from Drive folder → {}".format(n, dest))
+    else:
+        print("Downloaded {} CSV(s) from Drive folder {} → {}".format(n, folder_id, dest))
+    return dest
+
+
 def discover():
     """Group data/*.csv by person -> [(path, fmt, account), ...]."""
     by_person = {}
@@ -383,6 +461,10 @@ def discover():
 
 # ============================ outputs ============================
 def print_summary(person, sheet, stats, files):
+    if QUIET:
+        print("=== {} -> {}: merged {} rows (deduped {}) ===".format(
+            person, sheet, stats["count"], stats["dupes"]))
+        return
     print("\n=== {} -> {} ===".format(person, sheet))
     for path, fmt, account in files:
         print("    {:<22} [{:<9}] {}".format(account, fmt, os.path.basename(path)))
@@ -432,7 +514,20 @@ def main():
     ap.add_argument("--only", nargs="*", help="limit to these people (e.g. Anchal)")
     ap.add_argument("--no-price-fill", action="store_true",
                     help="skip the historical-close lookup for transfer-in cost basis")
+    ap.add_argument("--drive-folder", default=None,
+                    help="read CSVs from this Google Drive folder id instead of local data/ "
+                         "(defaults to TX_DRIVE_FOLDER)")
+    ap.add_argument("--quiet", action="store_true",
+                    help="trim output and hide ids (for public CI logs)")
     args = ap.parse_args()
+
+    global QUIET
+    QUIET = args.quiet
+
+    global DATA_DIR
+    folder = args.drive_folder or DRIVE_FOLDER_ID
+    if folder:
+        DATA_DIR = download_drive_csvs(folder)   # temp dir of downloaded CSVs
 
     by_person = discover()
     if not by_person:

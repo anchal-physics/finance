@@ -5,6 +5,9 @@
 
 # Google service-account key (never commit)
 service_account.json
+
+# Local secrets / config (sheet id, drive folder id, …) — never commit
+.env
 __pycache__/
 .venv/
 

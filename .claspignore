@@ -31,6 +31,10 @@ service_account.json
 logo/**
 error_message.txt
 
+# local secrets / config
+.env
+.env.example
+
 # clasp / auth config
 .clasp.json
 .clasprc.json

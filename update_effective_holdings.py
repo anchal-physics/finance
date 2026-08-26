@@ -49,7 +49,25 @@ import shutil
 import argparse
 from collections import OrderedDict
 
-# ---- config (environment variables override these) ----
+
+def _load_local_env(path=None):
+    """Load KEY=VALUE lines from a gitignored `.env` next to this script into
+    os.environ WITHOUT overriding values already set (so real env / CI wins)."""
+    path = path or os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(path):
+        return
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_local_env()
+
+# ---- config (environment variables override these; see .env / .env.example) ----
 LOCAL_FILE = os.environ.get("FINANCE_XLSX", os.path.join(os.path.dirname(__file__), "Finance.xlsx"))
 SPREADSHEET_ID = os.environ.get("FINANCE_SHEET_ID", "PUT-SPREADSHEET-ID-HERE")
 SERVICE_ACCOUNT_FILE = os.environ.get("GSPREAD_SA_FILE", "service_account.json")
@@ -225,9 +243,17 @@ def flow_table(flows):
     return data
 
 
+QUIET = False   # set by --quiet: suppress dollar figures (public CI logs)
+
+
 def print_preview(name, rows, total, flows):
     targets = {t for _, _, t in flows}
     sources = {s for s, _, _ in flows}
+    if QUIET:
+        # No dollar figures — safe for public Action logs.
+        print("    {} effective holdings; sankey: {} flows, {} sources → {} targets".format(
+            len(rows), len(flows), len(sources), len(targets)))
+        return
     print("    portfolio total ${:,.2f}; {} effective holdings; "
           "sankey: {} flows, {} sources → {} targets".format(
               total, len(rows), len(flows), len(sources), len(targets)))
@@ -467,7 +493,11 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="print, do not write")
     ap.add_argument("--file", default=LOCAL_FILE, help="local .xlsx path (local mode)")
     ap.add_argument("--sheets", nargs="*", default=SHEETS, help="sheet names to update")
+    ap.add_argument("--quiet", action="store_true",
+                    help="suppress dollar figures in output (for public CI logs)")
     args = ap.parse_args()
+    global QUIET
+    QUIET = args.quiet
     if args.online:
         run_online(args.sheets, args.dry_run)
     else:

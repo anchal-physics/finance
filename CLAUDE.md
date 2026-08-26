@@ -120,7 +120,11 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 > ```
 | `Tax.gs` | `FedTax`, `CATax`, year-specific aliases. Brackets for 2023/2024/2025 hardcoded. | yes |
 | `Stock.gs` | `GET_ALL_STOCK_SUMMARIES` FIFO lot-accounting function (multi-account; account is the leftmost input & output col; IRA = all long-term). | yes |
-| `build_transactions.py` | Merges `data/*.csv` (Robinhood + Fidelity) into a per-person chronological ledger with an Account column in A; back-fills transfer-in cost basis via historical-close lookup. `--online` writes A–J surgically to `Portfolio_AG`/`AA`. See §4. | yes |
+| `build_transactions.py` | Merges the broker CSVs (Robinhood + Fidelity) into a per-person chronological ledger with an Account column in A; back-fills transfer-in cost basis via historical-close lookup. Reads local `data/*.csv` OR (if `TX_DRIVE_FOLDER`/`--drive-folder` set) downloads them from a shared Drive folder. `--online` writes A–J surgically to `Portfolio_AG`/`AA`. See §4. | yes |
+| `DriveWatch.gs` | Apps Script hourly poller: watches the shared Drive folder of transaction CSVs and fires a GitHub `repository_dispatch` (`new-transactions`) when it changes, kicking `update-holdings.yml`. Config (folder id + PAT) in Script Properties. `installDriveWatchTrigger()` once. See `DRIVE_TRIGGER_SETUP.md`. | yes |
+| `recalc_sheet.py` | Force-recalcs a `Portfolio_*` sheet by re-stamping every GOOGLEFINANCE / GET_ALL_STOCK_SUMMARIES / TODAY formula to itself (Python port of Apps Script `forceRecalc_`). Runs between the merge and holdings steps in the workflow so the summary is fresh. | yes |
+| `.env` / `.env.example` | Gitignored local config (`.env`) for the Python scripts — `FINANCE_SHEET_ID`, `TX_DRIVE_FOLDER`, optional `GSPREAD_SA_FILE`; loaded automatically, real env/CI secrets win. `.env.example` is the committed template. | yes |
+| `DRIVE_TRIGGER_SETUP.md` | End-to-end setup for the Drive-folder → auto-update pipeline (folder sharing, repo secrets, PAT, Apps Script trigger). | yes |
 | `appsscript.json` | Apps Script manifest: web-app config (`executeAs: USER_ACCESSING`, `access: ANYONE`), enables Sheets advanced service, declares OAuth scopes. | yes |
 | `.clasp.json` | Local clasp config — contains the bound Script ID. | yes |
 | `.claspignore` | Denylist mode (push everything except specific noise). | yes |
@@ -419,6 +423,29 @@ from L rightward untouched). Needs `FINANCE_SHEET_ID` + `service_account.json`
 (same creds as the holdings script); run with the conda `finance` env's python.
 ⚠️ Filenames' date ranges are account-*open* dates, not first-transaction dates
 (Anchal's RH data actually starts 2024, not the "2016" in the name).
+
+**Data source — local or Drive.** By default it globs local `data/*.csv`. If
+`TX_DRIVE_FOLDER` (or `--drive-folder <id>`) is set, it instead downloads every
+CSV from that Google Drive folder (shared with the service account) into a temp
+dir via `google-auth` + the Drive REST API (no `google-api-python-client`
+needed — uses the SA key + `AuthorizedSession`), then merges those. Both scripts
+also auto-load a gitignored **`.env`** (`_load_local_env()`; real env / CI
+secrets always win) for `FINANCE_SHEET_ID` / `TX_DRIVE_FOLDER` / `GSPREAD_SA_FILE`.
+
+**Auto-update pipeline (Drive upload → sheet).** Drop a CSV in the shared Drive
+folder → `DriveWatch.gs` (hourly Apps Script poll) detects the change and POSTs a
+GitHub `repository_dispatch` (`new-transactions`) → `update-holdings.yml` runs
+three steps: `build_transactions.py --online` (Drive → `Portfolio_*` A:J) →
+`recalc_sheet.py` (force-recalc, +25 s settle) → `update_effective_holdings.py
+--online` (summary → `AN:AP`). `recalc_sheet.py` re-stamps every GOOGLEFINANCE /
+GET_ALL_STOCK_SUMMARIES / TODAY formula to itself (Python port of `forceRecalc_`)
+so the summary + prices are fresh before the holdings step reads `N:W`; if it
+ever still lags, the twice-daily freshness trigger reconciles it. ⚠️ **This repo
+is PUBLIC**, so Action logs are public — the scripts run with `--quiet` in CI to
+keep dollar figures and the folder id out of the logs; preserve that. Full setup
+(folder sharing, `TX_DRIVE_FOLDER` secret, fine-grained PAT with
+Contents:read+write in Script Properties, `installDriveWatchTrigger()`) is in
+**`DRIVE_TRIGGER_SETUP.md`**.
 
 ### Sheet: Investment
 

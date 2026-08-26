@@ -1,6 +1,16 @@
-name: Update effective holdings
+name: Update transactions + effective holdings
 
-# Manual only — private repo, paid minutes. Click "Run workflow" in the Actions tab.
+# Two ways to run:
+#   • Manual (workflow_dispatch) — click "Run workflow" in the Actions tab.
+#   • Auto (repository_dispatch: new-transactions) — fired by the DriveWatch
+#     Apps Script poller when a new CSV lands in the shared Drive folder
+#     (see DRIVE_TRIGGER_SETUP.md).
+#
+# It (1) merges the brokerage CSVs from the Drive folder into the Portfolio_*
+# ledgers, (2) forces the sheet to recalculate, then (3) recomputes the
+# look-through effective holdings.
+# NOTE: this repo is PUBLIC, so Action logs are public too — the scripts run in
+# --quiet mode here to keep dollar figures out of the logs.
 on:
   workflow_dispatch:
     inputs:
@@ -9,13 +19,15 @@ on:
         type: boolean
         default: false
       sheets:
-        description: "Comma-separated Portfolio sheet names to update"
+        description: "Comma-separated Portfolio sheet names for the holdings step"
         type: string
         default: "Portfolio_AG,Portfolio_AA"
       top_targets:
-        description: "Max distinct company nodes in the Sankey (the rest fold into 'Other holdings')"
+        description: "Max distinct company nodes in the Sankey (rest fold into 'Other holdings')"
         type: string
         default: "24"
+  repository_dispatch:
+    types: [new-transactions]
 
 permissions:
   contents: read          # workflow writes to Google, not to the repo
@@ -27,7 +39,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10    # hard cap on billable time
+    timeout-minutes: 12    # hard cap on billable time
     steps:
       - uses: actions/checkout@v4
 
@@ -46,16 +58,41 @@ jobs:
           SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
         run: printf '%s' "$SERVICE_ACCOUNT_KEY" > service_account.json
 
+      # STEP 1 — merge the Drive CSVs into the Portfolio_* transaction ledgers.
+      - name: Merge transaction CSVs from Drive into the sheet
+        env:
+          FINANCE_SHEET_ID: ${{ secrets.FINANCE_SHEET_ID }}
+          GSPREAD_SA_FILE: service_account.json
+          TX_DRIVE_FOLDER: ${{ secrets.TX_DRIVE_FOLDER }}
+        run: |
+          FLAG=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then FLAG="--dry-run"; fi
+          python build_transactions.py --online --quiet $FLAG
+
+      # STEP 2 — force the in-sheet GET_ALL_STOCK_SUMMARIES + GOOGLEFINANCE cells
+      # to recompute off the new rows before the holdings step reads N:W (the
+      # Python equivalent of forceRecalc_), then let the fetches settle.
+      - name: Force sheet recalculation
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          FINANCE_SHEET_ID: ${{ secrets.FINANCE_SHEET_ID }}
+          GSPREAD_SA_FILE: service_account.json
+          EFF_SHEETS: ${{ github.event.inputs.sheets || 'Portfolio_AG,Portfolio_AA' }}
+        run: |
+          python recalc_sheet.py
+          sleep 25
+
+      # STEP 3 — recompute the effective look-through holdings + Sankey.
       - name: Update look-through holdings on the Google Sheet
         env:
           FINANCE_SHEET_ID: ${{ secrets.FINANCE_SHEET_ID }}
           GSPREAD_SA_FILE: service_account.json
-          EFF_SHEETS: ${{ inputs.sheets }}
-          EFF_TOP_TARGETS: ${{ inputs.top_targets }}
+          EFF_SHEETS: ${{ github.event.inputs.sheets || 'Portfolio_AG,Portfolio_AA' }}
+          EFF_TOP_TARGETS: ${{ github.event.inputs.top_targets || '24' }}
         run: |
           FLAG=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then FLAG="--dry-run"; fi
-          python update_effective_holdings.py --online $FLAG
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then FLAG="--dry-run"; fi
+          python update_effective_holdings.py --online --quiet $FLAG
 
       - name: Remove key
         if: always()
