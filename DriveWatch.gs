@@ -20,7 +20,9 @@
  *        DISPATCH_EVENT   = new-transactions          (optional; this is the default)
  *      (Or run setDriveWatchConfig(folderId, pat) once from the editor.)
  *   3. Run installDriveWatchTrigger() once (authorises Drive + external requests,
- *      seeds the baseline snapshot, and creates the hourly poll).
+ *      seeds the baseline snapshot, and creates the 12-hour backstop poll).
+ * The open web app also polls this folder every ~30 s (pollDriveChanges), so the
+ * time trigger is just a backstop for when the app is closed.
  * Stop it with removeDriveWatchTrigger().
  * ----------------------------------------------------------------------
  */
@@ -58,22 +60,49 @@ function dwFolderSignature_(folderId) {
   return sig.join('|');
 }
 
-/** The polled function: fire a dispatch only when the folder actually changed. */
-function checkDriveFolderForNewFiles_() {
+/**
+ * Core change-detector, shared by the 12-hour trigger AND the 30 s client poll.
+ * Compares the folder signature to the stored snapshot and dispatches on change.
+ * Lock-guarded so concurrent callers (multiple browser sessions + the trigger)
+ * can't both fire for the same change; they share one DRIVE_SNAPSHOT property.
+ * Returns a short status string: unconfigured | busy | nochange | baseline | dispatched.
+ */
+function dwDetectAndDispatch_() {
   var cfg = dwConfig_();
-  if (!cfg.folderId || !cfg.pat) {
-    Logger.log('DriveWatch not configured (need DRIVE_FOLDER_ID + GITHUB_PAT).');
-    return;
+  if (!cfg.folderId || !cfg.pat) return 'unconfigured';
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return 'busy';            // another caller is checking — skip
+  try {
+    var snapshot = dwFolderSignature_(cfg.folderId);
+    var prev = DW_PROPS.getProperty('DRIVE_SNAPSHOT');
+    if (snapshot === prev) return 'nochange';
+    DW_PROPS.setProperty('DRIVE_SNAPSHOT', snapshot);
+    if (prev === null) return 'baseline';            // first run → just baseline, don't dispatch
+    dwDispatch_(cfg);
+    return 'dispatched';
+  } finally {
+    lock.releaseLock();
   }
-  var snapshot = dwFolderSignature_(cfg.folderId);
-  var prev = DW_PROPS.getProperty('DRIVE_SNAPSHOT');
-  if (snapshot === prev) return;                     // nothing changed
-  DW_PROPS.setProperty('DRIVE_SNAPSHOT', snapshot);
-  if (prev === null) {                               // first run → just baseline
-    Logger.log('DriveWatch: baseline snapshot stored; not dispatching.');
-    return;
+}
+
+/** 12-hour time-driven trigger handler (backstop for when the web app is closed). */
+function checkDriveFolderForNewFiles_() {
+  Logger.log('DriveWatch (backstop): ' + dwDetectAndDispatch_());
+}
+
+/**
+ * Client-callable poll (called every ~30 s from the open web app, alongside
+ * pollChanges). Runs as the viewer, so it only detects changes for a viewer who
+ * can see the folder (the owner); other viewers hit a Drive-access error which we
+ * swallow. Gives sub-minute updates when the app is open; the 12-hour trigger
+ * covers the rest.
+ */
+function pollDriveChanges() {
+  try {
+    return { status: dwDetectAndDispatch_() };
+  } catch (e) {
+    return { status: 'error', message: String(e) };   // e.g. viewer without folder access
   }
-  dwDispatch_(cfg);
 }
 
 /** POST a repository_dispatch to GitHub. */
@@ -93,12 +122,12 @@ function dwDispatch_(cfg) {
   Logger.log('DriveWatch dispatch → HTTP ' + code + (code === 204 ? ' (queued)' : ' ' + res.getContentText()));
 }
 
-/** Install the hourly poll (idempotent) and seed the baseline so it won't fire immediately. */
+/** Install the 12-hour backstop poll (idempotent) and seed the baseline so it won't fire immediately. */
 function installDriveWatchTrigger() {
   removeDriveWatchTrigger();
   checkDriveFolderForNewFiles_();   // seeds DRIVE_SNAPSHOT baseline on first run
-  ScriptApp.newTrigger('checkDriveFolderForNewFiles_').timeBased().everyHours(1).create();
-  Logger.log('DriveWatch hourly trigger installed.');
+  ScriptApp.newTrigger('checkDriveFolderForNewFiles_').timeBased().everyHours(12).create();
+  Logger.log('DriveWatch 12-hour backstop trigger installed.');
 }
 
 function removeDriveWatchTrigger() {

@@ -7,12 +7,12 @@ Portfolio_* sheets refresh themselves — merged ledger + look-through holdings.
  upload CSV to Drive folder
         │
         ▼
- DriveWatch.gs  (hourly Apps Script poll, runs as Anchal)
+ DriveWatch.gs   (open web app polls every ~30 s; 12 h trigger as backstop)
         │  folder changed?  → POST repository_dispatch
         ▼
  GitHub Actions: update-holdings.yml  (event: new-transactions)
         │  build_transactions.py --online   (Drive CSVs → Portfolio_* A:J)
-        │  wait for recalc
+        │  recalc_sheet.py                   (force recalc + settle)
         │  update_effective_holdings.py --online  (summary → AN:AP Sankey)
         ▼
  Finance sheet updated
@@ -28,7 +28,10 @@ Portfolio_* sheets refresh themselves — merged ledger + look-through holdings.
   it downloads every CSV from that folder instead of reading local `data/`.
 - **`update-holdings.yml`** — now runs *both* steps and also fires on
   `repository_dispatch: new-transactions`.
-- **`DriveWatch.gs`** — the hourly poller that watches the folder and dispatches.
+- **`DriveWatch.gs`** — watches the folder and dispatches. The open web app calls
+  `pollDriveChanges()` every ~30 s (fast path); a 12-hour time trigger is the
+  backstop for when the app is closed. Both share one lock-guarded detector +
+  snapshot, so they never double-fire.
 
 ## Local config (Python)
 
@@ -68,19 +71,23 @@ The workflow needs (Settings → Secrets and variables → Actions):
    Or run `setDriveWatchConfig("<folderId>", "<pat>")` once from the editor.
 3. Run **`installDriveWatchTrigger()`** once (Run ▸). Approve the new Drive +
    external-request scopes. It seeds a baseline snapshot (so it won't fire on the
-   first poll) and creates the hourly trigger.
+   first poll) and creates the **12-hour backstop trigger**. (The open web app's
+   30 s `pollDriveChanges()` needs no install — it ships with the client and uses
+   the same config/snapshot.)
    - Test the wiring immediately with **`dwTestDispatch()`** — it forces one
      dispatch; check the repo's Actions tab for a run.
-   - Stop it anytime with **`removeDriveWatchTrigger()`**.
+   - Stop the trigger anytime with **`removeDriveWatchTrigger()`** (the 30 s app
+     poll keeps working; both share the same detector).
 
 Because `DriveWatch.gs` and the new `drive.readonly` scope are in the Apps Script
 project, they ship with the normal CI deploy (push to `main`).
 
 ## Notes / caveats
 
-- **Cadence is hourly**, not instant (a time-driven poll, matching the existing
-  freshness triggers). Fine for occasional uploads; it also means one Actions run
-  per change, not per upload burst.
+- **Cadence:** ~30 s while you have the web app open (the client poll runs as you
+  and needs Drive access, so it's your sessions that trip it — which is who
+  uploads anyway); otherwise the 12-hour trigger catches it. One Actions run per
+  detected change, not per upload burst.
 - **Recalc:** after `build_transactions.py` rewrites the raw rows, the workflow
   runs `recalc_sheet.py` (re-stamps every GOOGLEFINANCE / GET_ALL_STOCK_SUMMARIES
   / TODAY formula to itself — the Python equivalent of `forceRecalc_`) and waits

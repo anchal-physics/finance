@@ -185,4 +185,21 @@ function forceRecalcData() {
     })
     .refreshData();
 }
+
+// Poll the shared Drive transaction folder every POLL_INTERVAL_MS while the app
+// is open, so a newly-uploaded CSV kicks the update workflow within ~30 s (the
+// 12-hour Apps Script trigger is the backstop when nobody has the app open).
+// Fire-and-forget: pollDriveChanges runs as the viewer and no-ops for viewers
+// without folder access; no UI feedback needed (the sheet updates via CI, and
+// the existing pollChanges/pollInvestment pick up the resulting sheet changes).
+var drivePollTimer = null;
+function startDrivePolling() {
+  if (drivePollTimer) return;
+  drivePollTimer = setInterval(function () {
+    google.script.run
+      .withSuccessHandler(function () {})
+      .withFailureHandler(function () {})
+      .pollDriveChanges();
+  }, POLL_INTERVAL_MS);
+}
 </script>

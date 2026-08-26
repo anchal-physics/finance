@@ -121,7 +121,7 @@ This repo now lives at `~/Git/anchal-physics/finance/`. Files:
 | `Tax.gs` | `FedTax`, `CATax`, year-specific aliases. Brackets for 2023/2024/2025 hardcoded. | yes |
 | `Stock.gs` | `GET_ALL_STOCK_SUMMARIES` FIFO lot-accounting function (multi-account; account is the leftmost input & output col; IRA = all long-term). | yes |
 | `build_transactions.py` | Merges the broker CSVs (Robinhood + Fidelity) into a per-person chronological ledger with an Account column in A; back-fills transfer-in cost basis via historical-close lookup. Reads local `data/*.csv` OR (if `TX_DRIVE_FOLDER`/`--drive-folder` set) downloads them from a shared Drive folder. `--online` writes A–J surgically to `Portfolio_AG`/`AA`. See §4. | yes |
-| `DriveWatch.gs` | Apps Script hourly poller: watches the shared Drive folder of transaction CSVs and fires a GitHub `repository_dispatch` (`new-transactions`) when it changes, kicking `update-holdings.yml`. Config (folder id + PAT) in Script Properties. `installDriveWatchTrigger()` once. See `DRIVE_TRIGGER_SETUP.md`. | yes |
+| `DriveWatch.gs` | Watches the shared Drive folder of transaction CSVs and fires a GitHub `repository_dispatch` (`new-transactions`) when it changes, kicking `update-holdings.yml`. Detection is shared by TWO callers (one `dwDetectAndDispatch_`, lock-guarded, one `DRIVE_SNAPSHOT`): the open web app polls `pollDriveChanges()` every ~30 s (fast path, runs as the viewer) and a 12-hour time trigger (`checkDriveFolderForNewFiles_`) is the backstop. Config (folder id + PAT) in Script Properties. `installDriveWatchTrigger()` once. See `DRIVE_TRIGGER_SETUP.md`. | yes |
 | `recalc_sheet.py` | Force-recalcs a `Portfolio_*` sheet by re-stamping every GOOGLEFINANCE / GET_ALL_STOCK_SUMMARIES / TODAY formula to itself (Python port of Apps Script `forceRecalc_`). Runs between the merge and holdings steps in the workflow so the summary is fresh. | yes |
 | `.env` / `.env.example` | Gitignored local config (`.env`) for the Python scripts — `FINANCE_SHEET_ID`, `TX_DRIVE_FOLDER`, optional `GSPREAD_SA_FILE`; loaded automatically, real env/CI secrets win. `.env.example` is the committed template. | yes |
 | `DRIVE_TRIGGER_SETUP.md` | End-to-end setup for the Drive-folder → auto-update pipeline (folder sharing, repo secrets, PAT, Apps Script trigger). | yes |
@@ -433,7 +433,7 @@ also auto-load a gitignored **`.env`** (`_load_local_env()`; real env / CI
 secrets always win) for `FINANCE_SHEET_ID` / `TX_DRIVE_FOLDER` / `GSPREAD_SA_FILE`.
 
 **Auto-update pipeline (Drive upload → sheet).** Drop a CSV in the shared Drive
-folder → `DriveWatch.gs` (hourly Apps Script poll) detects the change and POSTs a
+folder → `DriveWatch.gs` (30 s poll from the open web app, or the 12 h backstop trigger) detects the change and POSTs a
 GitHub `repository_dispatch` (`new-transactions`) → `update-holdings.yml` runs
 three steps: `build_transactions.py --online` (Drive → `Portfolio_*` A:J) →
 `recalc_sheet.py` (force-recalc, +25 s settle) → `update_effective_holdings.py
