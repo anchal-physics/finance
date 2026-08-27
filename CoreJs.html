@@ -157,6 +157,13 @@ function persistNamedSettings(key, obj) {
   }, 600);
 }
 
+// Stamp a page's "last updated" footer with the current local time (called each
+// time that page (re)renders its data from the sheet).
+function stampUpdated(id) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = 'Last updated: ' + new Date().toLocaleString();
+}
+
 var toastTimer = null;
 function toast(msg) {
   var t = document.getElementById('toast');

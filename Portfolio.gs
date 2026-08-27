@@ -52,10 +52,11 @@ function getPortfolioList() {
 
 /**
  * Per-stock stats + portfolio totals for one portfolio.
- * @return {Object} { key, label, stocks:[{ticker, value, cost, price,
- *   pctProfit, ltProfitDollar, ltProfitPct, hasLtProfit, colorIndex}],
- *   totals:{value, cost, profitDollar, profitPct} }
- *   Fractions (pctProfit, ltProfitPct, totals.profitPct) are ×100 in the UI.
+ * @return {Object} { key, label, stocks:[{ticker, value, cost, price, pctProfit,
+ *   taxLtProfitDollar, taxLtProfitPct, hasTaxLt,   // taxable LT capital gain
+ *   iraProfitDollar, iraProfitPct, hasIra,          // IRA (non-taxable) full gain
+ *   changes, colorIndex}], flows, totals:{value, cost, profitDollar, profitPct} }
+ *   Fractions (pctProfit, *Pct, totals.profitPct) are ×100 in the UI.
  */
 function getPortfolioStats(key) {
   var cfg = PORTFOLIOS_[key];
@@ -75,8 +76,11 @@ function getPortfolioStats(key) {
   var rel = {};
   Object.keys(PF_COLS).forEach(function (k) { rel[k] = colLetterToIndex_(PF_COLS[k]) - base; });
 
-  // One summary row per (account, ticker). Aggregate by ticker across accounts:
-  // sum value/cost/LT-profit, and take the (account-invariant) price/changes.
+  // One summary row per (account, ticker). Aggregate by ticker across accounts,
+  // BUT split profit by account type so the client can show two panels:
+  //   • taxable accounts → Long-term capital-gain profit (col Z, LT-only $)
+  //   • IRA accounts     → full gain (value − cost), sellable tax-free
+  // (`isIRA` = "IRA" in the account label, matching Stock.gs.)
   var byTicker = {};   // ticker -> aggregate
   var order = [];      // preserve first-seen order before value sort
   for (var r = PF_FIRST_DATA_ROW - 1; r < lastRow; r++) {
@@ -88,14 +92,17 @@ function getPortfolioStats(key) {
     var value = pfNum_(row[rel.value]);
     var cost = pfNum_(row[rel.cost]);
     var ltp = pfNum_(row[rel.ltProfit]);
+    var isIRA = /ira/i.test(String(row[rel.account] == null ? '' : row[rel.account]));
     var agg = byTicker[tk];
     if (!agg) {
-      agg = byTicker[tk] = { ticker: tk, value: 0, cost: 0, ltProfitDollar: 0, price: 0, changes: null };
+      agg = byTicker[tk] = { ticker: tk, value: 0, cost: 0, price: 0, changes: null,
+                             taxProfit: 0, taxCost: 0, iraProfit: 0, iraCost: 0 };
       order.push(tk);
     }
     agg.value += value;
     agg.cost += cost;
-    agg.ltProfitDollar += ltp;
+    if (isIRA) { agg.iraProfit += (value - cost); agg.iraCost += cost; }
+    else       { agg.taxProfit += ltp;            agg.taxCost += cost; }
     if (!agg.price) agg.price = pfNum_(row[rel.price]);
     if (!agg.changes) {
       var changes = {};
@@ -113,9 +120,14 @@ function getPortfolioStats(key) {
       cost: a.cost,
       price: a.price,
       pctProfit: a.cost > 0 ? (a.value - a.cost) / a.cost : 0,
-      ltProfitDollar: a.ltProfitDollar,
-      ltProfitPct: a.cost > 0 ? (a.value - a.cost) / a.cost : 0,
-      hasLtProfit: a.ltProfitDollar !== 0,
+      // Taxable long-term capital-gain profit ($ = col Z; % relative to taxable cost)
+      taxLtProfitDollar: a.taxProfit,
+      taxLtProfitPct: a.taxCost > 0 ? a.taxProfit / a.taxCost : 0,
+      hasTaxLt: Math.abs(a.taxProfit) > 1e-9,
+      // IRA (non-taxable) profit: full gain on IRA holdings
+      iraProfitDollar: a.iraProfit,
+      iraProfitPct: a.iraCost > 0 ? a.iraProfit / a.iraCost : 0,
+      hasIra: Math.abs(a.iraProfit) > 1e-9,
       changes: a.changes  // {w1,w4,w12,m6,y1} trailing % changes (fraction; null if blank)
     });
     totalValue += a.value;

@@ -181,6 +181,7 @@ function invRenderCharts(investor) {
   invApplySvg(document.getElementById('inv-pie-' + investor), invBuildPie(st.model, s));
   document.getElementById('inv-alloc-' + investor).innerHTML = invBuildAllocTable(st.model, s);
   invApplySvg(document.getElementById('inv-bar-' + investor), invBuildBar(st.model, s));
+  stampUpdated('updated-inv-' + investor);
 }
 
 // Alphabetical ticker table beside the pie: symbol · weekly $ · % of strategy.
@@ -407,7 +408,8 @@ function invPageHtml(investor) {
     '<details class="panel"><summary>Chart settings</summary>' +
       '<div class="panel-body" id="inv-settings-' + investor + '"></div></details>' +
     '<details class="panel"><summary>' + investor + ' data editor</summary>' +
-      '<div class="panel-body"><div id="inv-editor-' + investor + '"><div class="chart-empty">Loading…</div></div></div></details>';
+      '<div class="panel-body"><div id="inv-editor-' + investor + '"><div class="chart-empty">Loading…</div></div></div></details>' +
+    '<div class="page-updated" id="updated-inv-' + investor + '"></div>';
 }
 function invBuildPage(investor) {
   var page = document.getElementById('page-' + investor.toLowerCase());

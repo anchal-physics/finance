@@ -885,6 +885,7 @@ function rebuildAllSubpanels() {
   for (var i = 0; i < STATE.subpanels.length; i++) {
     host.appendChild(renderSubpanel(STATE.subpanels[i], i === STATE.subpanels.length - 1));
   }
+  stampUpdated('updated-sankey');
 }
 
 
