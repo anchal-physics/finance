@@ -6,11 +6,11 @@ Look-through portfolio exposure.
 
 The portfolio summary is now MULTI-ACCOUNT: GET_ALL_STOCK_SUMMARIES emits one
 row per (account, ticker). For each Portfolio_* sheet this reads N (account),
-O (ticker) and W (current value), decomposes every ETF position into its
-underlying holdings (via yahooquery), and writes TWO surgical blocks on the
-SAME sheet:
+O (ticker) and AB (Total + AB current value — includes projected Assumed-Bought
+shares), decomposes every ETF position into its underlying holdings (via
+yahooquery), and writes TWO surgical blocks on the SAME sheet:
 
-  SANKEY flows  → AN (Source) | AO (Value $) | AP (Target)
+  SANKEY flows  → AS (Source) | AT (Value $) | AU (Target)
       A THREE-LEVEL graph, one row per edge:
         account → ticker      (that account's position value)
         ticker  → effective holding (look-through company / residual)
@@ -18,7 +18,7 @@ SAME sheet:
       All but the top EFF_TOP_TARGETS companies fold into an "Other holdings"
       node; each ETF's un-decomposed remainder is a "<ETF> — other holdings"
       target so dollars reconcile. (Account→ticker edges are never folded.)
-  SUMMARY table → AR (Holding) | AS (Value $) | AT (% of portfolio, a FRACTION)
+  SUMMARY table → AW (Holding) | AX (Value $) | AY (% of portfolio, a FRACTION)
       The flat effective-holdings table (kept for reference).
 
 Both blocks have a header row. Only those columns are cleared + rewritten;
@@ -77,8 +77,8 @@ SHEETS = os.environ.get("EFF_SHEETS", "Portfolio_AG,Portfolio_AA").split(",")
 #   SANKEY  : Source | Value | Target  — one row per flow edge (Capuchin reads
 #             this to draw the effective-holdings Sankey panel).
 #   SUMMARY : Holding | Value ($) | %   — the flat effective-holdings table.
-SANKEY_START_COL = os.environ.get("EFF_SANKEY_COL", "AN")    # → AN, AO, AP
-SUMMARY_START_COL = os.environ.get("EFF_SUMMARY_COL", "AR")  # → AR, AS, AT
+SANKEY_START_COL = os.environ.get("EFF_SANKEY_COL", "AS")    # → AS, AT, AU
+SUMMARY_START_COL = os.environ.get("EFF_SUMMARY_COL", "AW")  # → AW, AX, AY
 try:
     TOP_TARGETS = int(os.environ.get("EFF_TOP_TARGETS") or 24)   # distinct right nodes; rest → "Other holdings"
 except ValueError:
@@ -265,7 +265,8 @@ def print_preview(name, rows, total, flows):
 
 # ============================ local (.xlsx) backend ============================
 def read_positions_xlsx(ws):
-    # Summary spill: N Account | O Ticker | P Total Shares | ... | W Value.
+    # Summary spill: N Account | O Ticker | P Total Shares | ... | AB Total+AB Value.
+    # Look-through uses the Total+AB current value (col AB) so projected shares are included.
     out = []
     for row in range(2, MAX_SCAN_ROW + 1):
         acct = ws["N{}".format(row)].value
@@ -278,7 +279,7 @@ def read_positions_xlsx(ws):
         out.append({"account": str(acct or "").strip(),
                     "ticker": tk,
                     "shares": to_float(ws["P{}".format(row)].value),
-                    "value": to_float(ws["W{}".format(row)].value)})
+                    "value": to_float(ws["AB{}".format(row)].value)})
     return out
 
 
@@ -464,12 +465,13 @@ def run_online(sheets, dry_run):
         if (ws.acell("N1").value or "").strip() != "Account":
             print("    N1 is not 'Account' → skipping (won't clobber data).")
             continue
-        # Spill: N Account | O Ticker | P Shares | Q | R | S | T | U | V | W Value
+        # Spill+computed N..AB: N Account,O Ticker,P Shares, …, AB Total+AB Value
+        # (index 14 from N). Look-through uses Total+AB value (col AB).
         positions = [{"account": (r[0] or "").strip(),
                       "ticker": r[1].strip(),
                       "shares": to_float(r[2]) if len(r) > 2 else None,
-                      "value": to_float(r[9]) if len(r) > 9 else None}
-                     for r in ws.get("N2:W{}".format(MAX_SCAN_ROW))
+                      "value": to_float(r[14]) if len(r) > 14 else None}
+                     for r in ws.get("N2:AB{}".format(MAX_SCAN_ROW))
                      if r and len(r) > 1 and r[1] and "#REF" not in r[1]]
         tickers = sorted({p["ticker"] for p in positions})
         if not tickers:

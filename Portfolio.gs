@@ -31,11 +31,17 @@ var PORTFOLIOS_ = {
 };
 
 // Column letters on the portfolio sheet; data starts row 2 (row 1 = header).
-// AC:AG are trailing period % changes (fractions) used as markers in the
-// return-bar chart. AB is a duplicate ticker column (ignored).
+// Post-AB layout: 9-col spill N:V (N acct,O tkr,P total,Q LT,R ST,S AB,T LTavg,
+// U STavg,V ABavg), then W Total Cost, X Total+AB Cost, Y Price, Z Total Current
+// Value, AA AB Current Value, AB Total+AB Current Value, AC/AD LT/ST value,
+// AE LT profit, AF profit %, AG ticker helper, AH:AL trailing changes,
+// AM:AQ trailing "val", AS:AU Sankey, AW:AY summary.
 var PF_COLS = {
-  account: 'N', ticker: 'O', cost: 'U', price: 'V', value: 'W', ltProfit: 'Z', ltProfitPct: 'AA',
-  w1: 'AC', w4: 'AD', w12: 'AE', m6: 'AF', y1: 'AG'
+  account: 'N', ticker: 'O', abShares: 'S',
+  cost: 'W', costWithAb: 'X', price: 'Y',
+  value: 'Z', abValue: 'AA', valueWithAb: 'AB',
+  ltProfit: 'AE', ltProfitPct: 'AF',
+  w1: 'AH', w4: 'AI', w12: 'AJ', m6: 'AK', y1: 'AL'
 };
 // Order + labels for the period-change markers (client draws ticks in this order).
 var PF_PERIOD_KEYS = ['w1', 'w4', 'w12', 'm6', 'y1'];
@@ -65,93 +71,99 @@ function getPortfolioStats(key) {
   if (!sheet) throw new Error('Sheet "' + cfg.sheetName + '" not found.');
 
   var base = colLetterToIndex_('N');                       // 0-based sheet column of N
-  // Read out to AP so we also pick up the Sankey flow block AN|AO|AP that the
-  // local update_effective_holdings.py script writes (Source | Value | Target).
-  var numCols = colLetterToIndex_('AP') - base + 1;        // N..AP
+  // Read out to AU so we also pick up the Sankey flow block AS|AT|AU that the
+  // update_effective_holdings.py script writes (Source | Value | Target).
+  var numCols = colLetterToIndex_('AU') - base + 1;        // N..AU
   var lastRow = sheet.getLastRow();
   if (lastRow < PF_FIRST_DATA_ROW) {
-    return { key: cfg.key, label: cfg.label, stocks: [], flows: [], totals: { value: 0, cost: 0, profitDollar: 0, profitPct: 0 } };
+    return { key: cfg.key, label: cfg.label, stocks: [], flows: [],
+             totals: { value: 0, valueWithAb: 0, cost: 0, costWithAb: 0, profitDollar: 0, profitPct: 0 } };
   }
   var vals = sheet.getRange(1, base + 1, lastRow, numCols).getValues();
   var rel = {};
   Object.keys(PF_COLS).forEach(function (k) { rel[k] = colLetterToIndex_(PF_COLS[k]) - base; });
 
-  // One summary row per (account, ticker). Aggregate by ticker across accounts,
-  // BUT split profit by account type so the client can show two panels:
-  //   • taxable accounts → Long-term capital-gain profit (col Z, LT-only $)
-  //   • IRA accounts     → full gain (value − cost), sellable tax-free
-  // (`isIRA` = "IRA" in the account label, matching Stock.gs.)
+  // One summary row per (account, ticker). Aggregate by ticker across accounts.
+  // "Total" = verified holdings; "Total+AB" also includes projected Assumed-Bought
+  // shares. Profit is split by account type: taxable → Long-term capital gain
+  // (col AE, verified only); IRA → full gain (Total and Total+AB), tax-free.
   var byTicker = {};   // ticker -> aggregate
-  var order = [];      // preserve first-seen order before value sort
+  var order = [];
   for (var r = PF_FIRST_DATA_ROW - 1; r < lastRow; r++) {
     var row = vals[r];
     var tk = row[rel.ticker];
     if (tk === '' || tk == null || String(tk).indexOf('#REF') >= 0) continue;
     tk = String(tk).trim();
     if (PF_CASH_TICKERS[tk.toUpperCase()]) continue;        // skip money-market cash
-    var value = pfNum_(row[rel.value]);
-    var cost = pfNum_(row[rel.cost]);
-    var ltp = pfNum_(row[rel.ltProfit]);
+    var value = pfNum_(row[rel.value]);            // Z Total Current Value
+    var valueAb = pfNum_(row[rel.valueWithAb]);    // AB Total+AB Current Value
+    var abValue = pfNum_(row[rel.abValue]);        // AA AB Current Value
+    var cost = pfNum_(row[rel.cost]);              // W Total Cost
+    var costAb = pfNum_(row[rel.costWithAb]);      // X Total+AB Cost
+    var ltp = pfNum_(row[rel.ltProfit]);           // AE LT profit (taxable, verified)
     var isIRA = /ira/i.test(String(row[rel.account] == null ? '' : row[rel.account]));
     var agg = byTicker[tk];
     if (!agg) {
-      agg = byTicker[tk] = { ticker: tk, value: 0, cost: 0, price: 0, changes: null,
-                             taxProfit: 0, taxCost: 0, iraProfit: 0, iraCost: 0 };
+      agg = byTicker[tk] = { ticker: tk, value: 0, valueAb: 0, abValue: 0, cost: 0, costAb: 0,
+                             price: 0, changes: null, taxProfit: 0, taxCost: 0,
+                             iraValue: 0, iraCost: 0, iraValueAb: 0, iraCostAb: 0 };
       order.push(tk);
     }
-    agg.value += value;
-    agg.cost += cost;
-    if (isIRA) { agg.iraProfit += (value - cost); agg.iraCost += cost; }
-    else       { agg.taxProfit += ltp;            agg.taxCost += cost; }
+    agg.value += value; agg.valueAb += valueAb; agg.abValue += abValue;
+    agg.cost += cost; agg.costAb += costAb;
+    if (isIRA) { agg.iraValue += value; agg.iraCost += cost; agg.iraValueAb += valueAb; agg.iraCostAb += costAb; }
+    else       { agg.taxProfit += ltp; agg.taxCost += cost; }
     if (!agg.price) agg.price = pfNum_(row[rel.price]);
     if (!agg.changes) {
       var changes = {};
       PF_PERIOD_KEYS.forEach(function (k) { changes[k] = pfNumOrNull_(row[rel[k]]); });
-      agg.changes = changes;    // trailing % changes are per-ticker (same across accounts)
+      agg.changes = changes;
     }
   }
 
-  var stocks = [], totalValue = 0, totalCost = 0;
+  var stocks = [], totalValue = 0, totalValueAb = 0, totalCost = 0, totalCostAb = 0;
   order.forEach(function (tk) {
     var a = byTicker[tk];
+    var iraP = a.iraValue - a.iraCost, iraPab = a.iraValueAb - a.iraCostAb;
     stocks.push({
-      ticker: a.ticker,
-      value: a.value,
-      cost: a.cost,
-      price: a.price,
+      ticker: a.ticker, price: a.price, changes: a.changes,
+      value: a.value, valueWithAb: a.valueAb, abValue: a.abValue,   // pies (Total / Total+AB)
+      cost: a.cost, costWithAb: a.costAb,
+      // Return %: Total (solid) vs Total+AB (dashed delta)
       pctProfit: a.cost > 0 ? (a.value - a.cost) / a.cost : 0,
-      // Taxable long-term capital-gain profit ($ = col Z; % relative to taxable cost)
+      pctProfitWithAb: a.costAb > 0 ? (a.valueAb - a.costAb) / a.costAb : 0,
+      // Taxable long-term capital gain (verified only; AB is never LT)
       taxLtProfitDollar: a.taxProfit,
       taxLtProfitPct: a.taxCost > 0 ? a.taxProfit / a.taxCost : 0,
       hasTaxLt: Math.abs(a.taxProfit) > 1e-9,
-      // IRA (non-taxable) profit: full gain on IRA holdings
-      iraProfitDollar: a.iraProfit,
-      iraProfitPct: a.iraCost > 0 ? a.iraProfit / a.iraCost : 0,
-      hasIra: Math.abs(a.iraProfit) > 1e-9,
-      changes: a.changes  // {w1,w4,w12,m6,y1} trailing % changes (fraction; null if blank)
+      // IRA (non-taxable) full gain: Total (solid) vs Total+AB (dashed delta)
+      iraProfitDollar: iraP,
+      iraProfitPct: a.iraCost > 0 ? iraP / a.iraCost : 0,
+      iraProfitDollarWithAb: iraPab,
+      iraProfitPctWithAb: a.iraCostAb > 0 ? iraPab / a.iraCostAb : 0,
+      hasIra: Math.abs(a.iraValueAb) > 1e-9
     });
-    totalValue += a.value;
-    totalCost += a.cost;
+    totalValue += a.value; totalValueAb += a.valueAb;
+    totalCost += a.cost; totalCostAb += a.costAb;
   });
 
-  stocks.sort(function (a, b) { return b.value - a.value; });
+  // Stable color per ticker = index sorted by Total+AB value (covers AB-only tickers).
+  stocks.sort(function (a, b) { return b.valueWithAb - a.valueWithAb; });
   stocks.forEach(function (s, i) { s.colorIndex = i; });
 
-  // Effective-holdings Sankey flows from AN (source) | AO (value) | AP (target).
-  // Row 1 is the header ("Source"); data starts row 2. The block may now hold
-  // TWO levels of edges: account → ticker and ticker → effective company.
-  var anRel = colLetterToIndex_('AN') - base;
-  var aoRel = colLetterToIndex_('AO') - base;
-  var apRel = colLetterToIndex_('AP') - base;
+  // Effective-holdings Sankey flows from AS (source) | AT (value) | AU (target).
+  var asRel = colLetterToIndex_('AS') - base;
+  var atRel = colLetterToIndex_('AT') - base;
+  var auRel = colLetterToIndex_('AU') - base;
   var flows = [];
   for (var fr = PF_FIRST_DATA_ROW - 1; fr < lastRow; fr++) {
-    var src = vals[fr][anRel];
+    var src = vals[fr][asRel];
     if (src === '' || src == null) continue;
     src = String(src).trim();
     if (src === '' || src === 'Source') continue;
-    var fv = pfNum_(vals[fr][aoRel]);
+    var fv = pfNum_(vals[fr][atRel]);
     if (fv <= 0) continue;
-    flows.push({ source: src, value: fv, target: String(vals[fr][apRel] == null ? '' : vals[fr][apRel]).trim() });
+    flows.push({ source: src, value: fv, target: String(vals[fr][auRel] == null ? '' : vals[fr][auRel]).trim() });
   }
 
   return {
@@ -161,9 +173,13 @@ function getPortfolioStats(key) {
     flows: flows,
     totals: {
       value: totalValue,
+      valueWithAb: totalValueAb,
       cost: totalCost,
+      costWithAb: totalCostAb,
       profitDollar: totalValue - totalCost,
-      profitPct: totalCost > 0 ? (totalValue - totalCost) / totalCost : 0
+      profitPct: totalCost > 0 ? (totalValue - totalCost) / totalCost : 0,
+      profitDollarWithAb: totalValueAb - totalCostAb,
+      profitPctWithAb: totalCostAb > 0 ? (totalValueAb - totalCostAb) / totalCostAb : 0
     }
   };
 }
