@@ -1,10 +1,13 @@
 name: Update transactions + effective holdings
 
-# Two ways to run:
+# Three ways to run:
 #   • Manual (workflow_dispatch) — click "Run workflow" in the Actions tab.
 #   • Auto (repository_dispatch: new-transactions) — fired by the DriveWatch
 #     Apps Script poller when a new CSV lands in the shared Drive folder
 #     (see DRIVE_TRIGGER_SETUP.md).
+#   • Weekly (schedule) — Fridays ~1h+ after the US close, so the Assumed-Bought
+#     projection picks up that day's Friday closing price. Cron is UTC-only:
+#     22:00 UTC = 6pm EDT / 5pm EST (≥1h after the 4pm ET close year-round).
 #
 # It (1) merges the brokerage CSVs from the Drive folder into the Portfolio_*
 # ledgers, (2) forces the sheet to recalculate, then (3) recomputes the
@@ -28,6 +31,8 @@ on:
         default: "24"
   repository_dispatch:
     types: [new-transactions]
+  schedule:
+    - cron: "0 22 * * 5"   # Fridays 22:00 UTC — after US market close (see note above)
 
 permissions:
   contents: read          # workflow writes to Google, not to the repo

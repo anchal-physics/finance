@@ -468,11 +468,11 @@ def run_online(sheets, dry_run):
         # Spill+computed N..AB: N Account,O Ticker,P Shares, …, AB Total+AB Value
         # (index 14 from N). Look-through uses Total+AB value (col AB).
         positions = [{"account": (r[0] or "").strip(),
-                      "ticker": r[1].strip(),
+                      "ticker": str(r[1]).strip(),
                       "shares": to_float(r[2]) if len(r) > 2 else None,
                       "value": to_float(r[14]) if len(r) > 14 else None}
-                     for r in ws.get("N2:AB{}".format(MAX_SCAN_ROW))
-                     if r and len(r) > 1 and r[1] and "#REF" not in r[1]]
+                     for r in ws.get("N2:AB{}".format(MAX_SCAN_ROW), value_render_option="UNFORMATTED_VALUE")
+                     if r and len(r) > 1 and r[1] and "#REF" not in str(r[1])]
         tickers = sorted({p["ticker"] for p in positions})
         if not tickers:
             print("    no positions found")

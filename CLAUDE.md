@@ -329,26 +329,37 @@ Anamika → `Portfolio_AA`) into one chronological ledger, produced by
   layout, no longer read or maintained. `Stock.gs` used to use it as a
   cost-basis fallback; that's gone (transfer-in basis is back-filled into
   Amount instead, see below). Don't reintroduce a dependency on it.
-- Cell **N1** contains (columns after the account shift):
+- Cell **N1** contains:
   `=GET_ALL_STOCK_SUMMARIES($A$2:A, $D$2:D, $E$2:E, $G$2:G, $H$2:H, $J$2:J)`
   args = account, settle date, instrument, trans code, quantity, amount.
-  It spills a **7-column** array into **N:T** (header row 1):
-  `Account / Ticker / Total Shares / LT Shares / ST Shares / LT Avg Cost/Share /
-  ST Avg Cost/Share`, **one row per (account, ticker)** — the same ticker in two
-  accounts is two rows, sorted by account then ticker.
-- Downstream computed columns (user-maintained formulas anchored to the spill):
-  `U` Total Cost · `V` Price (`GOOGLEFINANCE`) · `W` Total Current Value ·
-  `X` Total LT Value · `Y` Total ST Value · `Z` Possible Long Term Profit ($) ·
-  `AA` Possible Simple Profit % · `AB` Ticker (helper) · `AC`–`AG` trailing %
-  changes (1w/4w/12w/6m/1y). ⚠️ These letters moved right when the Account
-  column was added (spill grew 6→7 cols) plus an earlier one-column insert; if
-  the layout shifts again, update `Portfolio.gs` `PF_COLS` and
-  `update_effective_holdings.py` together.
+  It spills a **9-column** array into **N:V** (header row 1):
+  `Account / Ticker / Total Shares / LT Shares / ST Shares / AB Shares /
+  LT Avg Cost/Share / ST Avg Cost/Share / AB Avg Cost/Share`, **one row per
+  (account, ticker)**, sorted by account then ticker. **AB = "Assumed Bought"**
+  projected shares (see `ABUY` below); Total Shares is verified LT+ST only.
+- Downstream computed columns (user-maintained formulas anchored to the spill;
+  rewritten during the AB reshape — formats set via the service account):
+  `W` Total Cost · `X` **Total + AB Cost** · `Y` Price (`GOOGLEFINANCE`) ·
+  `Z` Total Current Value · `AA` **AB Current Value** · `AB` **Total + AB Current
+  Value** · `AC` Total LT Value · `AD` Total ST Value · `AE` Possible Long Term
+  Profit ($) · `AF` Possible Simple Profit % · `AG` Ticker (helper) · `AH`–`AL`
+  trailing % changes (1w/4w/12w/6m/1y; the old 4w/12w lookback swap is fixed) ·
+  `AM`–`AQ` trailing "val" (historical prices) · `AS`–`AU` Sankey · `AW`–`AY`
+  summary. ⚠️ If the layout shifts again, update `Portfolio.gs` `PF_COLS`,
+  `update_effective_holdings.py` (`EFF_SANKEY_COL`/`EFF_SUMMARY_COL` + the value
+  column it reads = `AB`), and the reshape/format scripts together.
 
 **IRA vs taxable** (`Stock.gs`): the account label decides the LT/ST split.
 Taxable accounts (no "IRA" in the label) do the normal FIFO holding-period
 split; **IRA accounts** (label contains "IRA", case-insensitive) report ALL
 remaining shares as long-term (ST = 0) — still one row per account.
+
+**Assumed-Bought (`ABUY`)**: rows with Trans Code `ABUY` are PROJECTED weekly-
+strategy buys for Fridays after the last real transaction, written by
+`build_transactions.py` (priced at each Friday's close). `Stock.gs` pools them into
+a separate **AB bucket** (AB Shares / AB Avg Cost) — never FIFO-consumed, never
+LT/ST, always "recent". They live in A–J alongside real rows but are clearly
+coded; see `build_transactions.py` below for the preserve/append lifecycle.
 
 **Quantity is UNSIGNED** — both Buy and Sell rows are positive. Direction comes
 from **Trans Code**, not the sign: `Buy`/`ACATI` (transfer in) add shares,
@@ -373,35 +384,32 @@ deltas; the true ratios are 3:1 / 6:1.)
 position).
 
 **Portfolio-stats page** (`Portfolio.gs` + `PortfolioJs.html`, tab "Anchal
-Portfolio"). Reads the computed columns: `N` account · `O` ticker · `U` cost ·
-`V` price · `W` current value · `Z` LT profit $ · `AA` profit % (fraction) ·
-`AC`–`AG` trailing % changes · `AN`–`AP` effective-holdings **Sankey flow block**
-(`Source | Value | Target`, header row 1) written by
-`update_effective_holdings.py`. Because tickers now repeat across accounts, the
-server **aggregates by ticker across accounts** for the pie/return/LT panels
-(one slice per ticker, portfolio-wide) — the per-account breakdown lives ONLY in
-the Sankey. Four panels: (1) pie of holdings by value + stats box; (2)
-**effective-holdings Sankey** (`pfRenderSankey`, d3-sankey) — now **THREE
-levels**: account (left, distinct dark colors) → ticker (middle, stable ticker
-color) → effective company (right, grey) + `"<ETF> — other holdings"` residuals
-+ a folded "Other holdings"; coloring/labels are **depth-based** (depth 0/1/2),
-% is relative to the portfolio total; reads `stats.flows` from `AN:AP`, empty
-until the script has run; (3) return-% bars (`(V−cost)/cost`) with trailing-change
-markers (1w dotted / 4w dashed / 12w dash-dot / 6m long-dash / 1y solid); (4) LT
-capital-gain profit dual-axis bars ($ left, % right; excludes 0/empty) — NOTE
-this sums each ticker's LT profit across accounts, so IRA gains are lumped in
-with taxable-LT gains. **Each ticker keeps a stable color** (value-sorted index
-into the `nested` palette) across the pie, the Sankey's ticker nodes, and the
-bars. A **Sankey settings** panel (collapsible, below panel 2) tunes node
-width/padding/row height/link opacity/font/alignment/show-$ — persisted per-user
-via the shared `wireSettingsPanel()` in `CoreJs` (key `pf:<key>`).
-Config-driven: add a portfolio by adding one `PORTFOLIOS_` entry.
+Portfolio"). Reads the computed columns: `N` account · `O` ticker · `S` AB shares ·
+`W` cost · `X` Total+AB cost · `Y` price · `Z` Total value · `AA` AB value ·
+`AB` Total+AB value · `AE` LT profit $ · `AF` profit % · `AH`–`AL` trailing %
+changes · `AS`–`AU` effective-holdings **Sankey flow block** written by
+`update_effective_holdings.py`. The server **aggregates by ticker across accounts**
+for the pie/return/LT/IRA panels, exposing both **Total** and **Total+AB**
+value/cost/return per stock (AB in a Roth account → IRA bucket). Panels: (1)
+Holdings & performance — **two pies** (Total, and Total+AB "incl. assumed") + a
+stats box where the dark figure is Total+AB and a 0.7-alpha line beneath is Total,
+cost basis shows `Total+AB (without AB: $X)`; (2) **effective-holdings Sankey**
+(`pfRenderSankey`, d3-sankey, THREE levels account→ticker→company, depth-based
+colors) fed from **Total+AB** value, `stats.flows` from `AS:AU`; (3) return-% bars
+(`(value−cost)/cost`) — solid = Total, **dashed overlay = Total+AB delta** — with
+trailing-change markers (1w dotted / 4w dashed / 12w dash-dot / 6m long-dash /
+1y solid); (4) Long-term capital-gain profit (Taxable) dual-axis bars (verified
+LT only; AB never LT); (5) **IRA Profits (Non-taxable)** dual-axis bars with the
+same dashed Total+AB overlay. **Each ticker keeps a stable color** (index sorted
+by Total+AB value) across both pies, the Sankey's ticker nodes, and the bars. A
+**Sankey settings** panel persists per-user via `wireSettingsPanel()` (key
+`pf:<key>`). Config-driven: add a portfolio by adding one `PORTFOLIOS_` entry.
 
-The `AN:AP` flow data comes from **`update_effective_holdings.py`** (`--online`),
-which reads the summary (`N` account / `O` ticker / `W` value), decomposes ETFs
-via `yahooquery`, and surgically writes the 3-level Sankey block (`account →
-ticker`, `ticker → company`) + an `AR:AT` summary. `EFF_SANKEY_COL`/
-`EFF_SUMMARY_COL` env defaults are `AN`/`AR`. See `SERVICE_ACCOUNT_SETUP.md` and
+The `AS:AU` flow data comes from **`update_effective_holdings.py`** (`--online`),
+which reads the summary (`N` account / `O` ticker / `AB` **Total+AB** value),
+decomposes ETFs via `yahooquery`, and surgically writes the 3-level Sankey block
+(`account → ticker`, `ticker → company`) + an `AW:AY` summary. `EFF_SANKEY_COL`/
+`EFF_SUMMARY_COL` env defaults are `AS`/`AW`. See `SERVICE_ACCOUNT_SETUP.md` and
 `.github/workflows/update-holdings.yml`.
 
 ### `build_transactions.py` — the transaction merge script
@@ -424,6 +432,20 @@ from L rightward untouched). Needs `FINANCE_SHEET_ID` + `service_account.json`
 ⚠️ Filenames' date ranges are account-*open* dates, not first-transaction dates
 (Anchal's RH data actually starts 2024, not the "2016" in the name).
 
+**Assumed-Bought (`ABUY`) projection.** In `--online` mode the script also
+appends projected weekly-strategy buys. It reads the `Investment` sheet
+(`INVESTMENT_COLS` per person: symbol D, weekly L/S, Robinhood/Roth sub-fracs
+H·I / O·P, exec switches J·K / Q·R) and, for each Friday after the person's
+latest REAL transaction, emits one `ABUY` row per (account, ticker, Friday) —
+`shares = portion$/that-Friday's-close` (yahooquery daily close), mapped to the
+per-person account (`PERSON_ACCOUNTS`: Robinhood→`Robinhood Investment`,
+Roth→`Robinhood Roth IRA` for Anchal / `Fidelity Roth IRA` for Anamika). **ABUY
+is preserve-and-append**: existing ABUY rows on the sheet are read first and kept
+(each freezes its week's switch state + price); only new Fridays are appended,
+and any ABUY on/before the new latest real date is dropped (real data supersedes
+it). So changing a switch does NOT rewrite past ABUY. `Stock.gs` buckets ABUY
+into the AB Shares/AB Avg columns.
+
 **Data source — local or Drive.** By default it globs local `data/*.csv`. If
 `TX_DRIVE_FOLDER` (or `--drive-folder <id>`) is set, it instead downloads every
 CSV from that Google Drive folder (shared with the service account) into a temp
@@ -435,12 +457,14 @@ secrets always win) for `FINANCE_SHEET_ID` / `TX_DRIVE_FOLDER` / `GSPREAD_SA_FIL
 **Auto-update pipeline (Drive upload → sheet).** Drop a CSV in the shared Drive
 folder → `DriveWatch.gs` (30 s poll from the open web app, or the 12 h backstop trigger) detects the change and POSTs a
 GitHub `repository_dispatch` (`new-transactions`) → `update-holdings.yml` runs
-three steps: `build_transactions.py --online` (Drive → `Portfolio_*` A:J) →
-`recalc_sheet.py` (force-recalc, +25 s settle) → `update_effective_holdings.py
---online` (summary → `AN:AP`). `recalc_sheet.py` re-stamps every GOOGLEFINANCE /
+three steps: `build_transactions.py --online` (Drive → `Portfolio_*` A:J, incl.
+ABUY) → `recalc_sheet.py` (force-recalc, +25 s settle) → `update_effective_holdings.py
+--online` (summary → `AS:AU`). `recalc_sheet.py` re-stamps every GOOGLEFINANCE /
 GET_ALL_STOCK_SUMMARIES / TODAY formula to itself (Python port of `forceRecalc_`)
-so the summary + prices are fresh before the holdings step reads `N:W`; if it
-ever still lags, the twice-daily freshness trigger reconciles it. ⚠️ **This repo
+so the summary + prices are fresh before the holdings step reads the Total+AB
+value; if it ever still lags, the twice-daily freshness trigger reconciles it.
+The workflow ALSO runs on a **weekly `schedule` cron** (`0 22 * * 5`, Fridays
+~1h+ after US close) so the AB projection picks up each new Friday's close. ⚠️ **This repo
 is PUBLIC**, so Action logs are public — the scripts run with `--quiet` in CI to
 keep dollar figures and the folder id out of the logs; preserve that. Full setup
 (folder sharing, `TX_DRIVE_FOLDER` secret, fine-grained PAT with
@@ -457,16 +481,24 @@ weighted-cumulative summary in row 3, ticker data row 4 onward:
 | A | Broad Category (only on each category's first row; spans the block below) |
 | B / C | Anchal / Anamika per-category Target % (sum formulas) |
 | D / E | Symbol / ETF name (`GOOGLEFINANCE`) |
-| F / G / H | **Anchal**: Expense Ratio / Target % / Weekly $ (base `H3=900`) |
-| I / J / K | **Anamika**: Expense Ratio / Target % / Weekly $ (base `K3=375`) |
-| L / M / N / O | 6mo / 1yr / 3yr / 5yr return ratios (period totals, not annualized) |
+| F–L | **Anchal**: F Expense Ratio · G Target % · H Robinhood sub-frac · I Roth IRA sub-frac (=1−H) · J Exec Robinhood (0/1) · K Exec Roth IRA (0/1) · L Total Weekly $ (=G·`L3`, `L3=900`) |
+| M–S | **Anamika**: M Expense Ratio · N Target % · O Robinhood sub-frac · P Roth IRA sub-frac · Q Exec Robinhood · R Exec Roth IRA · S Weekly $ (=N·`S3`, `S3=600`) |
+| T / U / V / W | 6mo / 1yr / 3yr / 5yr return ratios (period totals, not annualized) |
 
-**Conventions that bite if you forget them**: `G`/`J` (Target %) and the
-return columns `L:O` are **fractions** (sum of `G`≈1.0); `F`/`I` (Expense
+Each stock's weekly $ (`L`/`S`) is split into a **Robinhood (Taxable)** portion
+(sub-frac `H`/`O`) and a **Roth IRA (Non-taxable)** portion (`I`/`P`); the exec
+switches (`J`·`K` / `Q`·`R`) gate whether each portion executes. `build_transactions.py`
+reads these for the ABUY projection; `Investment.gs` `INVESTORS_` (`weeklyIdx`,
+`robSubIdx`/`rothSubIdx`, `execRobIdx`/`execRothIdx`, returns `T:W`) drives the
+webapp model + the right-side allocation table (per-account Robinhood $ / Roth
+IRA $ columns). ⚠️ `INVESTMENT_NUM_COLS = 23` (A:W) — widen if columns grow.
+
+**Conventions that bite if you forget them**: `G`/`N` (Target %) and the
+return columns `T:W` are **fractions** (sum of `G`≈1.0); `F`/`M` (Expense
 Ratio) are **already in percent** (e.g. `0.03` = 0.03%). So in the webapp,
 weights and returns are formatted `×100 + "%"`, but the effective expense
 ratio is formatted with just `+ "%"`. Per-ticker allocation weight = Target %
-(`G`/`J`) — this matches the sheet's own `L3:O3` cumulative formulas.
+(`G`/`N`).
 
 **Two sheet quirks the code works around** by computing all aggregates
 itself from raw cells (never reading row 3): `I3` (Anamika effective ER) is
