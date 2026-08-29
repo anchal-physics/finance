@@ -184,20 +184,28 @@ function invRenderCharts(investor) {
   stampUpdated('updated-inv-' + investor);
 }
 
-// Alphabetical ticker table beside the pie: symbol · weekly $ · % of strategy.
+// Alphabetical ticker table beside the pie: per-account weekly $ split
+// (Robinhood / Roth IRA), total weekly $, and % of strategy.
 function invBuildAllocTable(model, s) {
   var prec = s.shared.pctPrecision, rows = [];
   model.categories.forEach(function (cat) { cat.tickers.forEach(function (t) { rows.push(t); }); });
   rows.sort(function (a, b) { return a.symbol < b.symbol ? -1 : (a.symbol > b.symbol ? 1 : 0); });
   if (!rows.length) return '<div class="chart-empty">No allocation.</div>';
-  var html = '<table class="alloc-tbl"><thead><tr><th>Ticker</th><th class="num">Weekly</th><th class="num">%</th></tr></thead><tbody>';
+  var html = '<table class="alloc-tbl"><thead><tr><th>Ticker</th>' +
+             '<th class="num">Robinhood $</th><th class="num">Roth IRA $</th>' +
+             '<th class="num">Total</th><th class="num">%</th></tr></thead><tbody>';
   rows.forEach(function (t) {
     html += '<tr><td class="sym">' + escapeHtml(t.symbol) + '</td>' +
+            '<td class="num">' + invFmtMoney(t.robWeekly || 0) + '</td>' +
+            '<td class="num">' + invFmtMoney(t.rothWeekly || 0) + '</td>' +
             '<td class="num">' + invFmtMoney(t.weekly) + '</td>' +
             '<td class="num">' + invFmtPct(t.weightPct, prec) + '</td></tr>';
   });
-  html += '</tbody><tfoot><tr><td>Total</td><td class="num">' + invFmtMoney(model.totalWeekly) +
-          '</td><td class="num">' + invFmtPct(model.totalWeightPct, 0) + '</td></tr></tfoot></table>';
+  html += '</tbody><tfoot><tr><td>Total</td>' +
+          '<td class="num">' + invFmtMoney(model.totalRobWeekly || 0) + '</td>' +
+          '<td class="num">' + invFmtMoney(model.totalRothWeekly || 0) + '</td>' +
+          '<td class="num">' + invFmtMoney(model.totalWeekly) + '</td>' +
+          '<td class="num">' + invFmtPct(model.totalWeightPct, 0) + '</td></tr></tfoot></table>';
   return html;
 }
 

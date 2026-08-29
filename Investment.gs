@@ -14,41 +14,57 @@
 // (headers row 2, cumulative/weighted row 3, ticker data row 4 onward):
 //
 //   A Broad Category | B Anchal cat % | C Anamika cat % | D Symbol | E ETF name
-//   F Anchal ExpRatio | G Anchal Target % | H Anchal Weekly $
-//   I Anamika ExpRatio | J Anamika Target % | K Anamika Weekly $
-//   L 6mo% | M 1yr% | N 3yr% | O 5yr%  (period return ratios, shared)
+//   Anchal:  F ExpRatio | G Target % | H Robinhood sub-frac | I Roth IRA sub-frac
+//            J Exec Robinhood (0/1) | K Exec Roth IRA (0/1) | L Total Weekly $ (=G*L3)
+//   Anamika: M ExpRatio | N Target % | O Robinhood sub-frac | P Roth IRA sub-frac
+//            Q Exec Robinhood (0/1) | R Exec Roth IRA (0/1) | S Weekly $ (=N*S3)
+//   T 6mo% | U 1yr% | V 3yr% | W 5yr%  (period return ratios, shared)
 //
-// Per-ticker allocation weight = Target % (G for Anchal, J for Anamika); this
-// is what the sheet's own L3:O3 cumulative formulas use. We compute every
-// aggregate here from the raw cells rather than reading row 3, because the
-// sheet's I3 (Anamika effective ER) is weighted by G not J, and there is no
-// Anamika cumulative-return row. Verified against the sheet's F3/G3/L3:O3.
+// Each stock's weekly $ (L / S) is split into a Robinhood (Taxable) portion
+// (sub-frac H/O) and a Roth IRA (Non-taxable) portion (sub-frac I/P, = 1−H/O);
+// the exec switches (J/K, Q/R) gate whether each portion actually executes.
+// Per-ticker allocation weight = Target % (G/N). We compute every aggregate here
+// from raw cells (not row 3), because the sheet weights Anamika's effective ER
+// by G and has no Anamika cumulative-return row.
 
 var INVESTMENT_SHEET_NAME = 'Investment';
 
-// 0-based column indices into a row read from A1 (A=0 … O=14).
+// 0-based column indices into a row read from A1 (A=0 … W=22).
+// `readonly` = cells the editor shows value-only (derived formulas); `autofill`
+// = formulas copied down on row insert (via copyDownFormulas_, Webapp.gs).
 var INVESTORS_ = {
-  Anchal:  { investor: 'Anchal',  catPctIdx: 1, erIdx: 5, weightIdx: 6, weeklyIdx: 7,
-             nameCol: 'A', catPctCol: 'B', baseCol: 'H', weightCol: 'G',
-             tickerCols: ['D', 'E', 'F', 'G', 'H'], investorCols: ['F', 'G', 'H'] },
-  Anamika: { investor: 'Anamika', catPctIdx: 2, erIdx: 8, weightIdx: 9, weeklyIdx: 10,
-             nameCol: 'A', catPctCol: 'C', baseCol: 'K', weightCol: 'J',
-             tickerCols: ['D', 'E', 'I', 'J', 'K'], investorCols: ['I', 'J', 'K'] }
+  Anchal: {
+    investor: 'Anchal', catPctIdx: 1, erIdx: 5, weightIdx: 6, weeklyIdx: 11,
+    robSubIdx: 7, rothSubIdx: 8, execRobIdx: 9, execRothIdx: 10,
+    nameCol: 'A', catPctCol: 'B', baseCol: 'L', weightCol: 'G',
+    tickerCols: ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'],
+    investorCols: ['F', 'G', 'H', 'J', 'K'],   // editable inputs (for content-detect + clear)
+    readonly: ['E', 'I', 'L'],                 // name + derived Roth-sub + derived weekly
+    autofill: [
+      { col: 'E', template: '=IFERROR(GOOGLEFINANCE($D{ROW}, "name"), "")' },
+      { col: 'I', template: '=if(G{ROW} > 0, if(1-H{ROW} = 0, "", 1-H{ROW}), "")' },
+      { col: 'L', template: '=G{ROW}*$L$3' }
+    ]
+  },
+  Anamika: {
+    investor: 'Anamika', catPctIdx: 2, erIdx: 12, weightIdx: 13, weeklyIdx: 18,
+    robSubIdx: 14, rothSubIdx: 15, execRobIdx: 16, execRothIdx: 17,
+    nameCol: 'A', catPctCol: 'C', baseCol: 'S', weightCol: 'N',
+    tickerCols: ['D', 'E', 'M', 'N', 'O', 'P', 'Q', 'R', 'S'],
+    investorCols: ['M', 'N', 'O', 'Q', 'R'],
+    readonly: ['E', 'P', 'S'],
+    autofill: [
+      { col: 'E', template: '=IFERROR(GOOGLEFINANCE($D{ROW}, "name"), "")' },
+      { col: 'P', template: '=if(N{ROW} > 0, if(1-O{ROW} = 0, "", 1-O{ROW}), "")' },
+      { col: 'S', template: '=N{ROW}*$S$3' }
+    ]
+  }
 };
 
-// Read window for the Investment sheet (1-based rows, columns A:O).
+// Read window for the Investment sheet (1-based rows, columns A:W).
 var INVESTMENT_FIRST_DATA_ROW = 4;   // row 4 = first ticker
 var INVESTMENT_LAST_SCAN_ROW = 200;  // generous cap for appended rows
-var INVESTMENT_NUM_COLS = 15;        // A:O
-
-// Output-only columns (shared by both investors): the editor shows the computed
-// value (never the formula) and disallows editing; new rows auto-fill the
-// formula via copyDownFormulas_ (Webapp.gs). The ETF-name column E runs
-// GOOGLEFINANCE on the symbol in D. Generic — add specs here to auto-fill more.
-var INVESTMENT_READONLY_COLS = ['E'];
-var INVESTMENT_AUTOFILL = [
-  { col: 'E', template: '=IFERROR(GOOGLEFINANCE($D{ROW}, "name"), "")' }
-];
+var INVESTMENT_NUM_COLS = 23;        // A:W (through the 5yr return column)
 
 function invConfig_(investor) {
   var cfg = INVESTORS_[investor];
@@ -75,26 +91,31 @@ function readInvestmentValues_(sheet) {
  */
 function computeInvestmentModel_(values, cfg) {
   var CAT = 0, SYM = 3, NAME = 4;
-  var RET = { m6: 11, y1: 12, y3: 13, y5: 14 };
-  var baseWeekly = invNum_(values[2] && values[2][cfg.weeklyIdx]); // row 3 (index 2): H3 / K3
+  var RET = { m6: 19, y1: 20, y3: 21, y5: 22 };       // T,U,V,W
+  var baseWeekly = invNum_(values[2] && values[2][cfg.weeklyIdx]); // row 3 (index 2): L3 / S3
   var categories = [], cur = null;
-  var totalW = 0, sumErW = 0, totalWeekly = 0;
+  var totalW = 0, sumErW = 0, totalWeekly = 0, totalRob = 0, totalRoth = 0;
   var sumRet = { m6: 0, y1: 0, y3: 0, y5: 0 };
+  function newCat(name) { return { name: name, tickers: [], weight: 0, weekly: 0, rob: 0, roth: 0 }; }
   for (var r = 3; r < values.length; r++) {           // sheet row 4 onward
     var row = values[r] || [];
     var catName = invStr_(row[CAT]);
-    if (catName) { cur = { name: catName, tickers: [], weight: 0, weekly: 0 }; categories.push(cur); }
+    if (catName) { cur = newCat(catName); categories.push(cur); }
     var sym = invStr_(row[SYM]);
     if (!sym) continue;
-    if (!cur) { cur = { name: 'Uncategorized', tickers: [], weight: 0, weekly: 0 }; categories.push(cur); }
+    if (!cur) { cur = newCat('Uncategorized'); categories.push(cur); }
     var w = invNum_(row[cfg.weightIdx]), er = invNum_(row[cfg.erIdx]), weekly = invNum_(row[cfg.weeklyIdx]);
+    // Split weekly $ into executed Robinhood / Roth IRA portions (exec switch gates each).
+    var robW = invNum_(row[cfg.execRobIdx]) ? weekly * invNum_(row[cfg.robSubIdx]) : 0;
+    var rothW = invNum_(row[cfg.execRothIdx]) ? weekly * invNum_(row[cfg.rothSubIdx]) : 0;
     var t = {
-      symbol: sym, name: invStr_(row[NAME]), weight: w, expenseRatio: er, weekly: weekly,
+      symbol: sym, name: invStr_(row[NAME]), weight: w, expenseRatio: er,
+      weekly: weekly, robWeekly: robW, rothWeekly: rothW,
       returns: { m6: invNum_(row[RET.m6]), y1: invNum_(row[RET.y1]), y3: invNum_(row[RET.y3]), y5: invNum_(row[RET.y5]) }
     };
     cur.tickers.push(t);
-    cur.weight += w; cur.weekly += weekly;
-    totalW += w; totalWeekly += weekly; sumErW += er * w;
+    cur.weight += w; cur.weekly += weekly; cur.rob += robW; cur.roth += rothW;
+    totalW += w; totalWeekly += weekly; totalRob += robW; totalRoth += rothW; sumErW += er * w;
     sumRet.m6 += t.returns.m6 * w; sumRet.y1 += t.returns.y1 * w;
     sumRet.y3 += t.returns.y3 * w; sumRet.y5 += t.returns.y5 * w;
   }
@@ -103,6 +124,8 @@ function computeInvestmentModel_(values, cfg) {
     investor: cfg.investor,
     weeklyBase: baseWeekly,
     totalWeekly: invRound_(totalWeekly, 2),
+    totalRobWeekly: invRound_(totalRob, 2),
+    totalRothWeekly: invRound_(totalRoth, 2),
     totalWeightPct: totalW,
     effectiveExpenseRatio: sumErW / W,
     weightedReturns: { m6: sumRet.m6 / W, y1: sumRet.y1 / W, y3: sumRet.y3 / W, y5: sumRet.y5 / W },
@@ -118,6 +141,7 @@ function computeInvestmentModel_(values, cfg) {
       tickers: keep.map(function (t) {
         return {
           symbol: t.symbol, name: t.name, weightPct: t.weight / W, weekly: invRound_(t.weekly, 2),
+          robWeekly: invRound_(t.robWeekly, 2), rothWeekly: invRound_(t.rothWeekly, 2),
           expenseRatio: t.expenseRatio, returns: t.returns
         };
       })
@@ -209,7 +233,7 @@ function buildInvestmentEditor_(sheet, cfg) {
     columns: cfg.tickerCols,
     headers: headers,
     weightCol: cfg.weightCol,       // client highlights non-zero cells in this column
-    readonlyCols: INVESTMENT_READONLY_COLS,
+    readonlyCols: cfg.readonly,
     catPctCol: cfg.catPctCol,
     nameCol: cfg.nameCol,
     base: {
@@ -248,7 +272,7 @@ function pollInvestment(investor, lastHash) {
  */
 function writeInvestmentCell(payload) {
   var cfg = invConfig_(payload.investor);
-  if (INVESTMENT_READONLY_COLS.indexOf(payload.col) >= 0) {
+  if (cfg.readonly.indexOf(payload.col) >= 0) {
     throw new Error('Column ' + payload.col + ' is output-only (auto-filled).');
   }
   var allowed = cfg.tickerCols.concat([cfg.nameCol, cfg.catPctCol, cfg.baseCol]);
@@ -280,7 +304,7 @@ function addInvestmentStock(investor, headerRow) {
   var at = headerRow + 1;
   insertRowOnSheet_(sheet, at);
   sheet.getRange(at, colLetterToIndex_(cfg.weightCol) + 1).setValue(0);
-  copyDownFormulas_(sheet, at - 1, at, INVESTMENT_AUTOFILL); // ETF-name etc. from the row above
+  copyDownFormulas_(sheet, at - 1, at, cfg.autofill); // ETF-name + derived Roth-sub/weekly from the row above
   SpreadsheetApp.flush();
   return buildInvestmentEditor_(sheet, cfg);
 }
@@ -297,7 +321,7 @@ function addInvestmentCategory(investor, name) {
   if (newRow < INVESTMENT_FIRST_DATA_ROW) newRow = INVESTMENT_FIRST_DATA_ROW;
   if (newRow > INVESTMENT_LAST_SCAN_ROW) throw new Error('Row cap of ' + INVESTMENT_LAST_SCAN_ROW + ' reached.');
   sheet.getRange(newRow, colLetterToIndex_(cfg.nameCol) + 1).setValue(String(name == null ? '' : name).trim() || 'New Category');
-  copyDownFormulas_(sheet, newRow - 1, newRow, INVESTMENT_AUTOFILL); // seed ETF-name formula for the first stock
+  copyDownFormulas_(sheet, newRow - 1, newRow, cfg.autofill); // seed ETF-name + derived formulas for the first stock
   SpreadsheetApp.flush();
   return buildInvestmentEditor_(sheet, cfg);
 }
