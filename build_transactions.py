@@ -87,6 +87,23 @@ QUIET = False   # set by --quiet: trim output / hide ids (public CI logs)
 
 PERSON_SHEET = {"Anchal": "Portfolio_AG", "Anamika": "Portfolio_AA"}
 
+# ---- Assumed-Bought (AB) projection config ----
+# Which account label each Investment-sheet portion maps to (drives taxable vs
+# non-taxable and merging with real holdings). See §Investment sheet in CLAUDE.md.
+PERSON_ACCOUNTS = {
+    "Anchal":  {"taxable": "Robinhood Investment", "roth": "Robinhood Roth IRA"},
+    "Anamika": {"taxable": "Robinhood Investment", "roth": "Fidelity Roth IRA"},
+}
+# Investment-sheet columns per person: symbol, total weekly $, Robinhood/Roth
+# sub-fractions, and the two exec switches (post-insert layout, data row 4+).
+INVESTMENT_SHEET_NAME = "Investment"
+INVESTMENT_FIRST_ROW = 4
+INVESTMENT_COLS = {
+    "Anchal":  {"symbol": "D", "weekly": "L", "robSub": "H", "rothSub": "I", "execRob": "J", "execRoth": "K"},
+    "Anamika": {"symbol": "D", "weekly": "S", "robSub": "O", "rothSub": "P", "execRob": "Q", "execRoth": "R"},
+}
+AB_CODE = "ABUY"   # Trans Code marking a projected (assumed) weekly buy
+
 # Header written to row 1 (account is the new column A).
 HEADER = ["Account", "Activity Date", "Process Date", "Settle Date",
           "Instrument", "Description", "Trans Code", "Quantity", "Price", "Amount"]
@@ -439,6 +456,144 @@ def download_drive_csvs(folder_id):
     return dest
 
 
+# ================= Assumed-Bought (AB) projection =================
+# For each Friday AFTER the person's latest REAL transaction, the weekly strategy
+# is assumed to buy each stock whose exec switch is on, priced at that Friday's
+# close. Each assumed buy is one ABUY row per (account, ticker, Friday). ABUY
+# history is PRESERVED across runs (each row freezes that week's switches/price);
+# we only append new Fridays and drop ABUY that new real data has superseded.
+def _col0(letter):
+    n = 0
+    for ch in str(letter).upper():
+        n = n * 26 + (ord(ch) - 64)
+    return n - 1   # 0-based column index
+
+
+def _num(x):
+    v = parse_num(x)
+    return v if isinstance(v, float) else 0.0
+
+
+def fridays_between(after_dt, today_dt):
+    """Fridays strictly after `after_dt` and on/before `today_dt` (both datetimes)."""
+    out, d, end = [], after_dt.date() + timedelta(days=1), today_dt.date()
+    while d <= end:
+        if d.weekday() == 4:
+            out.append(datetime(d.year, d.month, d.day))
+        d += timedelta(days=1)
+    return out
+
+
+def read_investment_strategy(sh, person):
+    """[{symbol, robAmount, rothAmount}] for stocks with an executing weekly plan."""
+    cols = INVESTMENT_COLS[person]
+    ws = sh.worksheet(INVESTMENT_SHEET_NAME)
+    vals = ws.get("A{}:W{}".format(INVESTMENT_FIRST_ROW, 300), value_render_option="UNFORMATTED_VALUE")
+    out = []
+    for row in vals:
+        row = (row + [""] * 23)[:23]
+        sym = str(row[_col0(cols["symbol"])]).strip()
+        if not sym:
+            continue
+        weekly = _num(row[_col0(cols["weekly"])])
+        rob = weekly * _num(row[_col0(cols["robSub"])]) if _num(row[_col0(cols["execRob"])]) else 0.0
+        roth = weekly * _num(row[_col0(cols["rothSub"])]) if _num(row[_col0(cols["execRoth"])]) else 0.0
+        if rob > 0 or roth > 0:
+            out.append({"symbol": sym, "robAmount": round(rob, 2), "rothAmount": round(roth, 2)})
+    return out
+
+
+def read_existing_abuy(ws):
+    """Existing ABUY rows on the sheet -> ledger dicts (preserved verbatim)."""
+    last = len(ws.col_values(1))
+    if last < 2:
+        return []
+    rows = ws.get("A2:J{}".format(last), value_render_option="FORMATTED_VALUE")
+    out = []
+    for r in rows:
+        r = (r + [""] * 10)[:10]
+        if str(r[6]).strip().upper() != AB_CODE:
+            continue
+        out.append({
+            "account": str(r[0]).strip(), "activity": norm_date(r[1]), "process": norm_date(r[2]),
+            "settle": norm_date(r[3]), "instrument": str(r[4]).strip(), "description": str(r[5]).strip(),
+            "code": AB_CODE, "quantity": parse_num(r[7]), "price": parse_num(r[8]),
+            "amount": parse_num(r[9]), "_sortdate": parse_date(r[1]),
+        })
+    return out
+
+
+def _ab_row(account, ticker, friday, amount, close):
+    return {
+        "account": account, "activity": norm_date(friday.strftime("%m/%d/%Y")),
+        "process": norm_date(friday.strftime("%m/%d/%Y")), "settle": norm_date(friday.strftime("%m/%d/%Y")),
+        "instrument": ticker, "description": "Assumed weekly buy (strategy projection)",
+        "code": AB_CODE, "quantity": round(amount / close, 6), "price": round(close, 4),
+        "amount": round(-amount, 2), "_sortdate": friday,
+    }
+
+
+def build_ab_rows(sh, sheet_name, person, real_rows):
+    """Return (ab_rows, stats): preserved existing ABUY + freshly appended Fridays."""
+    stats = {"kept": 0, "new": 0}
+    if person not in PERSON_ACCOUNTS:
+        return [], stats
+    acct = PERSON_ACCOUNTS[person]
+    try:
+        ws = sh.worksheet(sheet_name)
+        existing = read_existing_abuy(ws)
+    except Exception as e:
+        print("    ! AB: could not read existing ABUY ({}) — skipping AB".format(type(e).__name__))
+        return [], stats
+
+    real_dates = [t["_sortdate"] for t in real_rows if t["_sortdate"]]
+    latest_real = max(real_dates) if real_dates else datetime(1900, 1, 1)
+    kept = [ab for ab in existing if ab["_sortdate"] and ab["_sortdate"] > latest_real]
+    stats["kept"] = len(kept)
+    covered = set(ab["_sortdate"].date() for ab in kept if ab["_sortdate"])
+    start = max([latest_real] + [ab["_sortdate"] for ab in kept if ab["_sortdate"]])
+    fridays = [f for f in fridays_between(start, datetime.now()) if f.date() not in covered]
+    if not fridays:
+        return kept, stats
+
+    try:
+        strategy = read_investment_strategy(sh, person)
+    except Exception as e:
+        print("    ! AB: could not read Investment strategy ({}) — keeping existing ABUY only".format(type(e).__name__))
+        return kept, stats
+    if not strategy:
+        return kept, stats
+
+    # historical daily closes for each strategy ticker over the projection window
+    try:
+        from yahooquery import Ticker
+        tickers = [s["symbol"] for s in strategy]
+        start_s = (min(fridays) - timedelta(days=6)).strftime("%Y-%m-%d")
+        end_s = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        closes = {}
+        for tk in tickers:
+            try:
+                closes[tk] = _hist_close_map(Ticker(tk).history(start=start_s, end=end_s, interval="1d"))
+            except Exception:
+                closes[tk] = {}
+    except ImportError:
+        print("    ! AB: yahooquery not installed — keeping existing ABUY only")
+        return kept, stats
+
+    new = []
+    for f in fridays:
+        for s in strategy:
+            px = _nearest_close(closes.get(s["symbol"], {}), f.date())
+            if not px:
+                continue   # Friday's close not available yet (future / not settled)
+            if s["robAmount"] > 0:
+                new.append(_ab_row(acct["taxable"], s["symbol"], f, s["robAmount"], px))
+            if s["rothAmount"] > 0:
+                new.append(_ab_row(acct["roth"], s["symbol"], f, s["rothAmount"], px))
+    stats["new"] = len(new)
+    return kept + new, stats
+
+
 def discover():
     """Group data/*.csv by person -> [(path, fmt, account), ...]."""
     by_person = {}
@@ -485,14 +640,17 @@ def write_csv(sheet, matrix):
     print("    wrote preview -> {}".format(p))
 
 
-def write_online(sheet, matrix):
+def open_spreadsheet():
     import gspread
     if "PUT-SPREADSHEET-ID" in SPREADSHEET_ID:
         sys.exit("Set FINANCE_SHEET_ID to the Google Sheet's id.")
     if not os.path.exists(SERVICE_ACCOUNT_FILE):
         sys.exit("Service-account key not found: {}".format(SERVICE_ACCOUNT_FILE))
-    gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
-    ws = gc.open_by_key(SPREADSHEET_ID).worksheet(sheet)
+    return gspread.service_account(filename=SERVICE_ACCOUNT_FILE).open_by_key(SPREADSHEET_ID)
+
+
+def write_online(sh, sheet, matrix):
+    ws = sh.worksheet(sheet)
     a1 = (ws.acell("A1").value or "").strip()
     if a1 not in ("Activity Date", "Account"):
         print("    A1 is '{}', not 'Activity Date'/'Account' -> refusing to write.".format(a1))
@@ -533,6 +691,8 @@ def main():
     if not by_person:
         sys.exit("No recognised CSVs in {}".format(DATA_DIR))
 
+    sh = open_spreadsheet() if args.online else None  # one handle for AB reads + writes
+
     for person, files in sorted(by_person.items()):
         if args.only and person not in args.only:
             continue
@@ -542,11 +702,19 @@ def main():
         if not sheet:
             print("    ! no sheet mapping for '{}' -> not writing".format(person))
             continue
+        # Assumed-Bought projection (online only — needs the sheet + Investment strategy).
+        if sh is not None:
+            ab_rows, ab_stats = build_ab_rows(sh, sheet, person, rows)
+            if ab_stats["kept"] or ab_stats["new"]:
+                print("    assumed-buys: kept {} existing ABUY + appended {} new".format(
+                    ab_stats["kept"], ab_stats["new"]))
+            rows = rows + ab_rows
+            rows.sort(key=lambda t: (t["_sortdate"] is not None, t["_sortdate"] or datetime.min), reverse=True)
         matrix = to_matrix(rows)
         if args.dry_run:
             continue
         if args.online:
-            write_online(sheet, matrix)
+            write_online(sh, sheet, matrix)
         else:
             write_csv(sheet, matrix)
 
